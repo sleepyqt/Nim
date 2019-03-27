@@ -94,7 +94,7 @@ const
 type
   TCommands* = enum           # Nim's commands
                               # **keep binary compatible**
-    cmdNone, cmdCompileToC, cmdCompileToCpp, cmdCompileToOC,
+    cmdNone, cmdCompileToLL, cmdCompileToC, cmdCompileToCpp, cmdCompileToOC,
     cmdCompileToJS,
     cmdCompileToLLVM, cmdInterpret, cmdPretty, cmdDoc,
     cmdGenDepend, cmdDump,

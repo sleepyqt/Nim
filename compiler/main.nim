@@ -19,7 +19,7 @@ import
   cgen, json, nversion,
   platform, nimconf, importer, passaux, depends, vm, vmdef, types, idgen,
   parser, modules, ccgutils, sigmatch, ropes,
-  modulegraphs, tables, rod, lineinfos, pathutils
+  modulegraphs, tables, rod, lineinfos, pathutils, llvm_pass
 
 when not defined(leanCompiler):
   import jsgen, docgen, docgen2
@@ -70,6 +70,28 @@ when not defined(leanCompiler):
     else: registerPass(graph, docgen2Pass)
     compileProject(graph)
     finishDoc2Pass(graph.config.projectName)
+
+proc commandCompileToLL(graph: ModuleGraph) =
+  echo "commandCompileToLL"
+  let conf = graph.config
+
+  if conf.outDir.isEmpty:
+    conf.outDir = conf.projectPath
+  if conf.outFile.isEmpty:
+    let targetName = if optGenDynLib in conf.globalOptions:
+      platform.OS[conf.target.targetOS].dllFrmt % conf.projectName
+    else:
+      conf.projectName & platform.OS[conf.target.targetOS].exeExt
+    conf.outFile = RelativeFile targetName
+
+  extccomp.initVars(conf)
+  semanticPasses(graph)
+  registerPass(graph, llPass)
+
+  compileProject(graph)
+  if graph.config.errorCounter > 0:
+    return # issue #9933
+  llWriteModules(graph.backend, conf)
 
 proc commandCompileToC(graph: ModuleGraph) =
   let conf = graph.config
@@ -187,6 +209,10 @@ proc mainCommand*(graph: ModuleGraph) =
   conf.searchPaths.add(conf.libpath)
   setId(100)
   case conf.command.normalize
+  of "ll":
+    conf.cmd = cmdCompileToLL
+    defineSymbol(graph.config.symbols, "ll")
+    commandCompileToLL(graph)
   of "c", "cc", "compile", "compiletoc":
     # compile means compileToC currently
     conf.cmd = cmdCompileToC
