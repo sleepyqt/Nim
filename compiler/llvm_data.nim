@@ -4,7 +4,7 @@ from options import ConfigRef
 from sighashes import SigHash, hash, `==`
 import tables
 
-import llvm_dll
+import llvm_dll as llvm
 
 type
   BScope* = ref object
@@ -23,6 +23,11 @@ type
     value_cache*: Table[int, ValueRef]
     # ☺
     training_wheels*: string
+    # llvm stuff
+    ll_context*: ContextRef
+    ll_module*: ModuleRef
+    ll_builder*: BuilderRef
+    ll_machine*: TargetMachineRef
 
   BModuleList* = ref object of RootObj
     modules*: seq[BModule]
@@ -34,12 +39,36 @@ proc newModuleList*(graph: ModuleGraph): BModuleList =
   result.graph = graph
   result.config = graph.config
 
+proc setup_codegen(module: var BModule) =
+  module.ll_context = llvm.contextCreate()
+  module.ll_builder = llvm.createBuilderInContext(module.ll_context)
+  module.ll_module = llvm.moduleCreateWithName(module.module_sym.name.s)
+  # --- setup target ---
+  # "i686-pc-linux-gnu"
+  # "x86_64-pc-linux-gnu"
+  var target: llvm.TargetRef = nil
+  var err: cstring
+  var triple: cstring = "x86_64-pc-linux-gnu"
+  var cpu: cstring = "i686"
+  var features: cstring = ""
+
+  if llvm.getTargetFromTriple(triple, addr target, addr err) != 0:
+    echo "getTargetFromTriple error: ", err
+    llvm.disposeMessage(err)
+
+  var opt_level = llvm.CodeGenLevelNone
+  var reloc = llvm.RelocDefault
+  var model = llvm.CodeModelDefault
+  module.ll_machine = llvm.createTargetMachine(target, triple, cpu, features, opt_level, reloc, model)
+  # --- cache types ---
+
 proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): BModule =
   new(result)
   result.module_sym = module_sym
   result.module_list = module_list
   result.type_cache = init_table[SigHash, TypeRef]()
   result.value_cache = init_table[int, ValueRef]()
+  setup_codegen(result)
   module_list.modules.add(result)
 
 # scopes

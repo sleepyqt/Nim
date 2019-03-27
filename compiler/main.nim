@@ -75,23 +75,26 @@ proc commandCompileToLL(graph: ModuleGraph) =
   echo "commandCompileToLL"
   let conf = graph.config
 
-  if conf.outDir.isEmpty:
-    conf.outDir = conf.projectPath
-  if conf.outFile.isEmpty:
-    let targetName = if optGenDynLib in conf.globalOptions:
-      platform.OS[conf.target.targetOS].dllFrmt % conf.projectName
-    else:
-      conf.projectName & platform.OS[conf.target.targetOS].exeExt
-    conf.outFile = RelativeFile targetName
+  var llLoaded = llInit(conf)
+  if llLoaded:
+    if conf.outDir.isEmpty:
+      conf.outDir = conf.projectPath
+    if conf.outFile.isEmpty:
+      let targetName = if optGenDynLib in conf.globalOptions:
+        platform.OS[conf.target.targetOS].dllFrmt % conf.projectName
+      else:
+        conf.projectName & platform.OS[conf.target.targetOS].exeExt
+      conf.outFile = RelativeFile targetName
 
-  extccomp.initVars(conf)
-  semanticPasses(graph)
-  registerPass(graph, llPass)
+    extccomp.initVars(conf)
+    semanticPasses(graph)
+    registerPass(graph, llPass)
 
-  compileProject(graph)
-  if graph.config.errorCounter > 0:
-    return # issue #9933
-  llWriteModules(graph.backend, conf)
+    compileProject(graph)
+    if graph.config.errorCounter > 0:
+      return # issue #9933
+    llWriteModules(graph.backend, conf)
+    llShutdown()
 
 proc commandCompileToC(graph: ModuleGraph) =
   let conf = graph.config

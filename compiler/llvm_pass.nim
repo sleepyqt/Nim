@@ -28,40 +28,37 @@ proc myProcess(pass: PPassContext, node: PNode): PNode =
 
 # Codegen Setup ----------------------------------------------------------------
 
-proc init_codegen(config: ConfigRef) =
-  case config.target.targetCPU:
-  of cpuI386, cpuAMD64:
-    llvm.initializeX86Target()
-    llvm.initializeX86TargetInfo()
-    llvm.initializeX86TargetTargetMC()
-    llvm.initializeX86AsmParser()
-    llvm.initializeX86AsmPrinter()
-    llvm.initializeX86Disassembler()
+proc llInit*(config: ConfigRef): bool =
+  result = ll_load_dll()
+  if result:
+    case config.target.targetCPU:
+    of cpuI386, cpuAMD64:
+      llvm.initializeX86Target()
+      llvm.initializeX86TargetInfo()
+      llvm.initializeX86TargetTargetMC()
+      llvm.initializeX86AsmParser()
+      llvm.initializeX86AsmPrinter()
+      llvm.initializeX86Disassembler()
 
-    let pass_reg = llvm.getGlobalPassRegistry()
-    llvm.initializeCore(pass_reg)
-    llvm.initializeTransformUtils(pass_reg)
-    llvm.initializeInstrumentation(pass_reg)
-    llvm.initializeCodeGen(pass_reg)
-    llvm.initializeTarget(pass_reg)
-  else: assert(false, "unsupported cpu")
+      let pass_reg = llvm.getGlobalPassRegistry()
+      llvm.initializeCore(pass_reg)
+      llvm.initializeTransformUtils(pass_reg)
+      llvm.initializeInstrumentation(pass_reg)
+      llvm.initializeCodeGen(pass_reg)
+      llvm.initializeTarget(pass_reg)
+    else: assert(false, "unsupported cpu")
 
-proc shutdown_codegen =
+proc llShutdown* =
   llvm.shutdown()
 
 # ------------------------------------------------------------------------------
 
 proc llWriteModules*(backend: RootRef, config: ConfigRef) =
-  if ll_load_dll():
-    init_codegen(config)
-    echo "llWriteModules"
-    let mod_list = BModuleList(backend)
-    for module in mod_list.modules:
-      echo "-- write module --------------------------------"
-      echo module.training_wheels
-      echo "------------------------------------------------"
-    shutdown_codegen()
-  else:
-    echo "cannot load llvm dll :("
+  echo "llWriteModules"
+  let mod_list = BModuleList(backend)
+  for module in mod_list.modules:
+    echo "-- write module --------------------------------"
+    echo module.training_wheels
+    echo "------------------------------------------------"
 
 const llPass* = makePass(myOpen, myProcess, myClose)
