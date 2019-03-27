@@ -19,14 +19,18 @@ proc myProcess(pass: PPassContext, node: PNode): PNode =
   #echo "myProcess"
   result = node
   var module = BModule(pass)
-  if not skipCodegen(module.module_list.config, node):
-    let new_node = transformStmt(module.module_list.graph, module.module_sym, node)
-    gen_stmt_list(module, new_node)
+  if module.module_sym.name.s == "hello": # todo skip for debugging
+    if not skipCodegen(module.module_list.config, node):
+      let new_node = transformStmt(module.module_list.graph, module.module_sym, node)
+      gen_stmt_list(module, new_node)
 
 proc llWriteModules*(backend: RootRef, config: ConfigRef) =
   echo "llWriteModules"
   let mod_list = BModuleList(backend)
   for module in mod_list.modules:
-    echo "write module"
+    echo "-- write module --------------------------------"
+    echo module.training_wheels
+    echo "------------------------------------------------"
+
 
 const llPass* = makePass(myOpen, myProcess, myClose)
