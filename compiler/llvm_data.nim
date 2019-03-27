@@ -1,7 +1,7 @@
 from modulegraphs import PPassContext, ModuleGraph
 from ast import PSym
 from options import ConfigRef
-from sighashes import SigHash
+from sighashes import SigHash, hash, `==`
 import tables
 
 import llvm_dll
@@ -55,13 +55,13 @@ proc close_scope*(module: BModule) =
 # cache
 
 proc add_type*(module: BModule; sig: SigHash; typ: TypeRef) =
-  discard
+  module.type_cache.add(sig, typ)
 
 proc get_type*(module: BModule; sig: SigHash): TypeRef =
-  discard
+  module.type_cache[sig]
 
 proc add_value*(module: BModule; id: int; val: ValueRef) =
-  discard
+  module.value_cache.add(id, val)
 
 proc get_value*(module: BModule; id: int): ValueRef =
-  discard
+  module.value_cache[id]

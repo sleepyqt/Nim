@@ -1,5 +1,5 @@
 import ast
-import llvm_data, llvm_expr, llvm_type
+import llvm_data, llvm_expr, llvm_type, llvm_dll
 
 proc gen_stmt*(module: BModule; node: PNode)
 
@@ -9,12 +9,22 @@ proc gen_stmt_list*(module: BModule; node: PNode) =
 
 # Variables --------------------------------------------------------------------
 
+proc gen_local_var(module: BModule; node: PNode) =
+  echo "× local var"
+  let ll_val: ValueRef = nil
+  module.add_value(node[0].sym.id, ll_val)
+
+proc gen_global_var(module: BModule; node: PNode) =
+  echo "× global var"
+  let ll_val: ValueRef = nil
+  module.add_value(node[0].sym.id, ll_val)
+
 proc gen_ident_defs(module: BModule; node: PNode) =
   if node[0].kind == nkSym:
     if sfGlobal in node[0].sym.flags:
-      echo "× global var"
+      gen_global_var(module, node)
     else:
-      echo "× local var"
+      gen_local_var(module, node)
 
 proc gen_asgn(module: BModule; node: PNode) =
   let lhs = node[0]
