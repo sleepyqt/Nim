@@ -2,6 +2,9 @@ from modulegraphs import PPassContext, ModuleGraph
 from ast import PSym
 from options import ConfigRef
 from sighashes import SigHash, hash, `==`
+from msgs import toFullPath
+from lineinfos import FileIndex
+from pathutils import AbsoluteFile
 import tables
 
 import llvm_dll as llvm
@@ -15,6 +18,8 @@ type
     module_sym*: PSym
     top_scope*: BScope
     module_list*: BModuleList
+    file_name*: AbsoluteFile
+    full_file_name*: AbsoluteFile
     # cache common types
     ll_int*, ll_int8*, ll_int16*, ll_int32*, ll_int64*: TypeRef
     ll_float32*, ll_float64*: TypeRef
@@ -28,6 +33,7 @@ type
     ll_module*: ModuleRef
     ll_builder*: BuilderRef
     ll_machine*: TargetMachineRef
+
 
   BModuleList* = ref object of RootObj
     modules*: seq[BModule]
@@ -68,6 +74,7 @@ proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): 
   result.module_list = module_list
   result.type_cache = init_table[SigHash, TypeRef]()
   result.value_cache = init_table[int, ValueRef]()
+  result.file_name = AbsoluteFile toFullPath(config, FileIndex module_sym.position)
   setup_codegen(result)
   module_list.modules.add(result)
 

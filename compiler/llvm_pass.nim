@@ -1,9 +1,10 @@
 import ast, idents
-from options import ConfigRef
+from options import ConfigRef, completeGeneratedFilePath, withPackageName
 from passes import makePass, skipCodegen
 from transf import transformStmt
 from modulegraphs import PPassContext, ModuleGraph
 from platform import TSystemCPU
+from pathutils import changeFileExt, `$`
 
 import llvm_data, llvm_stmt
 import llvm_dll as llvm
@@ -55,10 +56,34 @@ proc llShutdown* =
 
 proc llWriteModules*(backend: RootRef, config: ConfigRef) =
   echo "llWriteModules"
+
   let mod_list = BModuleList(backend)
   for module in mod_list.modules:
+    let config = module.module_list.config
+    let base_file_name = completeGeneratedFilePath(config, withPackageName(config, module.file_name))
+    let ll_file = changeFileExt(base_file_name, ".ll")
+    let bc_file = changeFileExt(base_file_name, ".bc")
+    let o_file = changeFileExt(base_file_name, ".o")
     echo "-- write module --------------------------------"
+    echo ll_file
+    echo bc_file
+    echo o_file
     echo module.training_wheels
+
+    when true:
+      var err0: cstring
+      var res0 = llvm.printModuleToFile(module.ll_module, cstring ll_file, addr err0)
+      llvm.disposeMessage(err0)
+
+    when false:
+      var res1 = llvm.writeBitcodeToFile(module.ll_module, cstring bc_file)
+
+    when false:
+      var err1: cstring
+      var fmt = llvm.ObjectFile
+      var res2 = llvm.targetMachineEmitToFile(module.ll_machine, cstring module.ll_module, o_file, fmt, addr err1)
+      llvm.disposeMessage(err1)
+
     echo "------------------------------------------------"
 
 const llPass* = makePass(myOpen, myProcess, myClose)
