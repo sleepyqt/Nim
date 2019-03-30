@@ -38,6 +38,36 @@ type
   TargetMachineRef* = ptr object
   TargetRef* = ptr object
 
+  IntPredicate* = enum
+    IntEQ = 32,                 ## *< equal
+    IntNE,                    ## *< not equal
+    IntUGT,                   ## *< unsigned greater than
+    IntUGE,                   ## *< unsigned greater or equal
+    IntULT,                   ## *< unsigned less than
+    IntULE,                   ## *< unsigned less or equal
+    IntSGT,                   ## *< signed greater than
+    IntSGE,                   ## *< signed greater or equal
+    IntSLT,                   ## *< signed less than
+    IntSLE                    ## *< signed less or equal
+
+  RealPredicate* = enum
+    RealPredicateFalse,       ## *< Always false (always folded)
+    RealOEQ,                  ## *< True if ordered and equal
+    RealOGT,                  ## *< True if ordered and greater than
+    RealOGE,                  ## *< True if ordered and greater than or equal
+    RealOLT,                  ## *< True if ordered and less than
+    RealOLE,                  ## *< True if ordered and less than or equal
+    RealONE,                  ## *< True if ordered and operands are unequal
+    RealORD,                  ## *< True if ordered (no nans)
+    RealUNO,                  ## *< True if unordered: isnan(X) | isnan(Y)
+    RealUEQ,                  ## *< True if unordered or equal
+    RealUGT,                  ## *< True if unordered or greater than
+    RealUGE,                  ## *< True if unordered, greater than, or equal
+    RealULT,                  ## *< True if unordered or less than
+    RealULE,                  ## *< True if unordered, less than, or equal
+    RealUNE,                  ## *< True if unordered or not equal
+    RealPredicateTrue         ## *< Always true (always folded)
+
 # ------------------------------------------------------------------------------
 
 var contextCreate*: proc (): ContextRef {.dll.}
@@ -120,6 +150,14 @@ var buildSwitch*: proc(a2: BuilderRef; v: ValueRef; `else`: BasicBlockRef; numCa
 var buildIndirectBr*: proc(b: BuilderRef; `addr`: ValueRef; numDests: cuint): ValueRef {.dll.}
 var buildInvoke*: proc(a2: BuilderRef; fn: ValueRef; args: ptr ValueRef; numArgs: cuint; then: BasicBlockRef; catch: BasicBlockRef; name: cstring): ValueRef {.dll.}
 var buildUnreachable*: proc(a2: BuilderRef): ValueRef {.dll.}
+
+var constInt*: proc(intTy: TypeRef; n: culonglong; signExtend: Bool): ValueRef {.dll.}
+
+var buildICmp*: proc(a2: BuilderRef; op: IntPredicate; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildFCmp*: proc(a2: BuilderRef; op: RealPredicate; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+
+var getBasicBlockParent*: proc(bb: BasicBlockRef): ValueRef {.dll.}
+var getBasicBlockTerminator*: proc(bb: BasicBlockRef): ValueRef {.dll.}
 
 # -----------------------------------------------------------------------------
 
@@ -210,3 +248,11 @@ proc ll_load_dll*: bool =
     get_proc(lib, buildIndirectBr, "LLVMBuildIndirectBr")
     get_proc(lib, buildInvoke, "LLVMBuildInvoke")
     get_proc(lib, buildUnreachable, "LLVMBuildUnreachable")
+
+    get_proc(lib, constInt, "LLVMConstInt")
+
+    get_proc(lib, buildICmp, "LLVMBuildICmp")
+    get_proc(lib, buildFCmp, "LLVMBuildFCmp")
+
+    get_proc(lib, getBasicBlockParent, "LLVMGetBasicBlockParent")
+    get_proc(lib, getBasicBlockTerminator, "LLVMGetBasicBlockTerminator")

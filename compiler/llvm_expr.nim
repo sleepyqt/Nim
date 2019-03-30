@@ -155,23 +155,82 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
   post:
   ]#
 
+  let entry_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(entry_bb)
+
   let post_bb = llvm.appendBasicBlockInContext(
     module.ll_context,
     module.top_scope.proc_val,
     "post")
 
+  llvm.moveBasicBlockAfter(post_bb, entry_bb)
+
+  var else_bb: BasicBlockRef = nil
+
   echo "[] gen_if"
-  for i in countup(0, sonsLen(node) - 1):
+  #for i in countup(0, sonsLen(node) - 1):
+  for i in countdown(sonsLen(node) - 1, 0):
     let it = node.sons[i]
-    if i == 0:
-      # if
-      discard
     if it.kind == nkElifBranch:
-      # elif
-      discard
+      # nkElifBranch
+      var elif_bb: BasicBlockRef = nil
+      var cond_bb: BasicBlockRef = entry_bb
+      if i != 0:
+        # generate label for elif branch
+        elif_bb = llvm.appendBasicBlockInContext(
+          module.ll_context,
+          fun,
+          "elif" & $i)
+        llvm.moveBasicBlockAfter(elif_bb, entry_bb)
+        cond_bb = elif_bb
+
+      let then_bb = llvm.appendBasicBlockInContext(
+        module.ll_context,
+        fun,
+        "then" & $i)
+      llvm.moveBasicBlockAfter(then_bb, cond_bb)
+
+      # *** emit cond ***
+
+      llvm.positionBuilderAtEnd(module.ll_builder, cond_bb)
+      let cond_lhs = llvm.constInt(module.ll_bool, 0, 0) # todo: derp
+      let cond_rhs = llvm.constInt(module.ll_bool, 0, 0)
+      let cond = llvm.buildICmp(module.ll_builder, llvm.IntNE, cond_lhs, cond_rhs, "")
+      if else_bb == nil:
+        # else branch missing :todo:
+        discard llvm.buildCondBr(module.ll_builder, cond, then_bb, else_bb)
+      else:
+        discard llvm.buildCondBr(module.ll_builder, cond, then_bb, else_bb)
+
+      llvm.positionBuilderAtEnd(module.ll_builder, then_bb)
+
+      # *** emit then branch code ***
+
+      gen_stmt(module, it.sons[1])
+
+      # terminate basic block if needed
+      if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
+        discard llvm.buildBr(module.ll_builder, post_bb)
+
+      else_bb = elif_bb
     elif it.kind == nkElse:
-      # else
-      discard
+      # nkElse
+      else_bb = llvm.appendBasicBlockInContext(
+        module.ll_context,
+        fun,
+        "else")
+      llvm.moveBasicBlockAfter(else_bb, entry_bb)
+      llvm.positionBuilderAtEnd(module.ll_builder, else_bb)
+
+      # *** emit else branch code ***
+
+      gen_stmt(module, it.sons[0])
+
+      # terminate basic block if needed
+      if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
+        discard llvm.buildBr(module.ll_builder, post_bb)
+
+  llvm.positionBuilderAtEnd(module.ll_builder, post_bb)
 
 # ------------------------------------------------------------------------------
 
