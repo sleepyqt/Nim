@@ -21,6 +21,7 @@ type
     file_name*: AbsoluteFile
     full_file_name*: AbsoluteFile
     # cache common types
+    ll_void*: TypeRef
     ll_int*, ll_int8*, ll_int16*, ll_int32*, ll_int64*: TypeRef
     ll_float32*, ll_float64*: TypeRef
     # cache for LLVM values and types
@@ -67,6 +68,14 @@ proc setup_codegen(module: var BModule) =
   var model = llvm.CodeModelDefault
   module.ll_machine = llvm.createTargetMachine(target, triple, cpu, features, opt_level, reloc, model)
   # --- cache types ---
+  module.ll_void = llvm.voidTypeInContext(module.ll_context)
+  module.ll_int = llvm.int64TypeInContext(module.ll_context) # todo platform specific
+  module.ll_int8 = llvm.int8TypeInContext(module.ll_context)
+  module.ll_int16 = llvm.int16TypeInContext(module.ll_context)
+  module.ll_int32 = llvm.int32TypeInContext(module.ll_context)
+  module.ll_int64 = llvm.int64TypeInContext(module.ll_context)
+  module.ll_float32 = llvm.floatTypeInContext(module.ll_context)
+  module.ll_float64 = llvm.doubleTypeInContext(module.ll_context)
 
 proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): BModule =
   new(result)

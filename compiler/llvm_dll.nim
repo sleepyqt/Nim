@@ -79,10 +79,28 @@ var initializeIPA*: proc(r: PassRegistryRef) {.dll.}
 var initializeCodeGen*: proc(r: PassRegistryRef) {.dll.}
 var initializeTarget*: proc(r: PassRegistryRef) {.dll.}
 var printModuleToFile*: proc(m: ModuleRef; filename: cstring; errorMessage: ptr cstring): Bool {.dll.}
+var printModuleToString*: proc(m: ModuleRef): cstring {.dll.}
+
 var writeBitcodeToFile*: proc(m: ModuleRef; path: cstring): cint {.dll.}
 var targetMachineEmitToFile*: proc(t: TargetMachineRef; m: ModuleRef; filename: cstring; codegen: CodeGenFileType; errorMessage: ptr cstring): Bool {.dll.}
+
 var addFunction*: proc(m: ModuleRef; name: cstring; functionTy: TypeRef): ValueRef {.dll.}
 var functionType*: proc(returnType: TypeRef; paramTypes: ptr TypeRef; paramCount: cuint; isVarArg: Bool): TypeRef {.dll.}
+
+var printTypeToString*: proc(val: TypeRef): cstring {.dll.}
+var printValueToString*: proc(val: ValueRef): cstring {.dll.}
+var typeOf*: proc(val: ValueRef): TypeRef {.dll.}
+
+var structTypeInContext*: proc(c: ContextRef; elementTypes: ptr TypeRef; elementCount: cuint; packed: Bool): TypeRef {.dll.}
+var structCreateNamed*: proc(c: ContextRef; name: cstring): TypeRef {.dll.}
+var structSetBody*: proc(structTy: TypeRef; elementTypes: ptr TypeRef; elementCount: cuint; packed: Bool) {.dll.}
+
+var appendBasicBlockInContext*: proc(c: ContextRef; fn: ValueRef; name: cstring): BasicBlockRef {.dll.}
+var insertBasicBlockInContext*: proc(c: ContextRef; bb: BasicBlockRef; name: cstring): BasicBlockRef {.dll.}
+var moveBasicBlockBefore*: proc(bb: BasicBlockRef; movePos: BasicBlockRef) {.dll.}
+var moveBasicBlockAfter*: proc(bb: BasicBlockRef; movePos: BasicBlockRef) {.dll.}
+var getFirstInstruction*: proc(bb: BasicBlockRef): ValueRef {.dll.}
+var getLastInstruction*: proc(bb: BasicBlockRef): ValueRef {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -133,7 +151,24 @@ proc ll_load_dll*: bool =
     get_proc(lib, initializeCodeGen, "LLVMInitializeCodeGen")
     get_proc(lib, initializeTarget, "LLVMInitializeTarget")
     get_proc(lib, printModuleToFile, "LLVMPrintModuleToFile")
+    get_proc(lib, printModuleToString, "LLVMPrintModuleToString")
     get_proc(lib, writeBitcodeToFile, "LLVMWriteBitcodeToFile")
     get_proc(lib, targetMachineEmitToFile, "LLVMTargetMachineEmitToFile")
+
     get_proc(lib, addFunction, "LLVMAddFunction")
     get_proc(lib, functionType, "LLVMFunctionType")
+
+    get_proc(lib, printTypeToString, "LLVMPrintTypeToString")
+    get_proc(lib, printValueToString, "LLVMPrintValueToString")
+    get_proc(lib, typeOf, "LLVMTypeOf")
+
+    get_proc(lib, structTypeInContext, "LLVMStructTypeInContext")
+    get_proc(lib, structCreateNamed, "LLVMStructCreateNamed")
+    get_proc(lib, structSetBody, "LLVMStructSetBody")
+
+    get_proc(lib, appendBasicBlockInContext, "LLVMAppendBasicBlockInContext")
+    get_proc(lib, insertBasicBlockInContext, "LLVMInsertBasicBlockInContext")
+    get_proc(lib, moveBasicBlockBefore, "LLVMMoveBasicBlockBefore")
+    get_proc(lib, moveBasicBlockAfter, "LLVMMoveBasicBlockAfter")
+    get_proc(lib, getFirstInstruction, "LLVMGetFirstInstruction")
+    get_proc(lib, getLastInstruction, "LLVMGetLastInstruction")
