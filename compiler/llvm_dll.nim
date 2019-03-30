@@ -41,7 +41,6 @@ type
 # ------------------------------------------------------------------------------
 
 var contextCreate*: proc (): ContextRef {.dll.}
-var createBuilderInContext*: proc (c: ContextRef): BuilderRef {.dll.}
 var moduleCreateWithName*: proc (moduleID: cstring): ModuleRef {.dll.}
 
 var int1TypeInContext*: proc(c: ContextRef): TypeRef {.dll.}
@@ -102,7 +101,27 @@ var moveBasicBlockAfter*: proc(bb: BasicBlockRef; movePos: BasicBlockRef) {.dll.
 var getFirstInstruction*: proc(bb: BasicBlockRef): ValueRef {.dll.}
 var getLastInstruction*: proc(bb: BasicBlockRef): ValueRef {.dll.}
 
-# ------------------------------------------------------------------------------
+var createBuilderInContext*: proc(c: ContextRef): BuilderRef {.dll.}
+var positionBuilder*: proc(builder: BuilderRef; `block`: BasicBlockRef; instr: ValueRef) {.dll.}
+var positionBuilderBefore*: proc(builder: BuilderRef; instr: ValueRef) {.dll.}
+var positionBuilderAtEnd*: proc(builder: BuilderRef; `block`: BasicBlockRef) {.dll.}
+var getInsertBlock*: proc(builder: BuilderRef): BasicBlockRef {.dll.}
+var clearInsertionPosition*: proc(builder: BuilderRef) {.dll.}
+var insertIntoBuilder*: proc(builder: BuilderRef; instr: ValueRef) {.dll.}
+var insertIntoBuilderWithName*: proc(builder: BuilderRef; instr: ValueRef; name: cstring) {.dll.}
+var disposeBuilder*: proc(builder: BuilderRef) {.dll.}
+
+var buildRetVoid*: proc(a2: BuilderRef): ValueRef {.dll.}
+var buildRet*: proc(a2: BuilderRef; v: ValueRef): ValueRef {.dll.}
+var buildAggregateRet*: proc(a2: BuilderRef; retVals: ptr ValueRef; n: cuint): ValueRef {.dll.}
+var buildBr*: proc(a2: BuilderRef; dest: BasicBlockRef): ValueRef {.dll.}
+var buildCondBr*: proc(a2: BuilderRef; `if`: ValueRef; then: BasicBlockRef; `else`: BasicBlockRef): ValueRef {.dll.}
+var buildSwitch*: proc(a2: BuilderRef; v: ValueRef; `else`: BasicBlockRef; numCases: cuint): ValueRef {.dll.}
+var buildIndirectBr*: proc(b: BuilderRef; `addr`: ValueRef; numDests: cuint): ValueRef {.dll.}
+var buildInvoke*: proc(a2: BuilderRef; fn: ValueRef; args: ptr ValueRef; numArgs: cuint; then: BasicBlockRef; catch: BasicBlockRef; name: cstring): ValueRef {.dll.}
+var buildUnreachable*: proc(a2: BuilderRef): ValueRef {.dll.}
+
+# -----------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
   fun = cast[type(fun)](symAddr(lib, name))
@@ -113,7 +132,6 @@ proc ll_load_dll*: bool =
   result = lib != nil
   if result:
     get_proc(lib, contextCreate, "LLVMContextCreate")
-    get_proc(lib, createBuilderInContext, "LLVMCreateBuilderInContext")
     get_proc(lib, moduleCreateWithName, "LLVMModuleCreateWithName")
 
     get_proc(lib, int1TypeInContext, "LLVMInt1TypeInContext")
@@ -172,3 +190,23 @@ proc ll_load_dll*: bool =
     get_proc(lib, moveBasicBlockAfter, "LLVMMoveBasicBlockAfter")
     get_proc(lib, getFirstInstruction, "LLVMGetFirstInstruction")
     get_proc(lib, getLastInstruction, "LLVMGetLastInstruction")
+
+    get_proc(lib, createBuilderInContext, "LLVMCreateBuilderInContext")
+    get_proc(lib, positionBuilder, "LLVMPositionBuilder")
+    get_proc(lib, positionBuilderBefore, "LLVMPositionBuilderBefore")
+    get_proc(lib, positionBuilderAtEnd, "LLVMPositionBuilderAtEnd")
+    get_proc(lib, getInsertBlock, "LLVMGetInsertBlock")
+    get_proc(lib, clearInsertionPosition, "LLVMClearInsertionPosition")
+    get_proc(lib, insertIntoBuilder, "LLVMInsertIntoBuilder")
+    get_proc(lib, insertIntoBuilderWithName, "LLVMInsertIntoBuilderWithName")
+    get_proc(lib, disposeBuilder, "LLVMDisposeBuilder")
+
+    get_proc(lib, buildRetVoid, "LLVMBuildRetVoid")
+    get_proc(lib, buildRet, "LLVMBuildRet")
+    get_proc(lib, buildAggregateRet, "LLVMBuildAggregateRet")
+    get_proc(lib, buildBr, "LLVMBuildBr")
+    get_proc(lib, buildCondBr, "LLVMBuildCondBr")
+    get_proc(lib, buildSwitch, "LLVMBuildSwitch")
+    get_proc(lib, buildIndirectBr, "LLVMBuildIndirectBr")
+    get_proc(lib, buildInvoke, "LLVMBuildInvoke")
+    get_proc(lib, buildUnreachable, "LLVMBuildUnreachable")

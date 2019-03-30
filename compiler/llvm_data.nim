@@ -35,7 +35,6 @@ type
     ll_builder*: BuilderRef
     ll_machine*: TargetMachineRef
 
-
   BModuleList* = ref object of RootObj
     modules*: seq[BModule]
     graph*: ModuleGraph
@@ -77,6 +76,11 @@ proc setup_codegen(module: var BModule) =
   module.ll_float32 = llvm.floatTypeInContext(module.ll_context)
   module.ll_float64 = llvm.doubleTypeInContext(module.ll_context)
 
+  assert(module.ll_context != nil)
+  assert(module.ll_builder != nil)
+  assert(module.ll_module != nil)
+  assert(module.ll_machine != nil)
+
 proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): BModule =
   new(result)
   result.module_sym = module_sym
@@ -90,11 +94,13 @@ proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): 
 # scopes
 
 proc open_scope*(module: BModule) =
+  echo "OPEN SCOPE"
   var scope = BScope()
   scope.parent = module.top_scope
   module.top_scope = scope
 
 proc close_scope*(module: BModule) =
+  echo "CLOSE SCOPE"
   module.top_scope = module.top_scope.parent
 
 # cache

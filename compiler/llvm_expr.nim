@@ -6,6 +6,7 @@ import llvm_dll as llvm
 proc gen_L_value*(module: BModule; node: PNode): ValueRef
 proc gen_R_value*(module: BModule; node: PNode): ValueRef
 proc gen_stmt_list*(module: BModule; node: PNode)
+proc gen_stmt*(module: BModule; node: PNode)
 
 # ------------------------------------------------------------------------------
 
@@ -61,6 +62,27 @@ proc gen_proc(module: BModule; sym: PSym) =
   echo "[", m, "]"
   disposeMessage(m)
 
+  let proc_name = sym.name.s & $sym.id
+  let proc_val = llvm.addFunction(module.ll_module, proc_name, proc_type)
+
+  module.open_scope()
+  module.top_scope.proc_val = proc_val
+
+  let entry_bb = llvm.appendBasicBlockInContext(
+    module.ll_context,
+    module.top_scope.proc_val,
+    "entry")
+
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+
+  let new_body = transformBody(module.module_list.graph, sym, cache = false)
+  gen_stmt(module, new_body)
+
+  discard llvm.buildRetVoid(module.ll_builder)
+
+  module.close_scope()
+  echo "[] end gen_proc: ", sym.name.s
+
 # - Statements -----------------------------------------------------------------
 
 proc gen_asgn(module: BModule; node: PNode) =
@@ -98,7 +120,58 @@ proc gen_var_section(module: BModule; node: PNode) =
       gen_single_var(module, def)
 
 proc gen_if(module: BModule; node: PNode): ValueRef =
+  assert(module != nil)
+  assert(node != nil)
+  assert(module.top_scope != nil)
+  assert(module.top_scope.proc_val != nil)
+
+  #[
+  if a: 1
+  elif b: 2
+  elif c: 3
+  else: 4
+
+  entry:
+    cond a
+    br a, then, elif1
+  then:
+    1
+    br post
+  elif1:
+    cond b
+    br b, then1, elif2
+  then1:
+    2
+    br post
+  elif2:
+    cond c
+    br c, then2, else
+  then2:
+    3
+    br post
+  else:
+    4
+    br post
+  post:
+  ]#
+
+  let post_bb = llvm.appendBasicBlockInContext(
+    module.ll_context,
+    module.top_scope.proc_val,
+    "post")
+
   echo "[] gen_if"
+  for i in countup(0, sonsLen(node) - 1):
+    let it = node.sons[i]
+    if i == 0:
+      # if
+      discard
+    if it.kind == nkElifBranch:
+      # elif
+      discard
+    elif it.kind == nkElse:
+      # else
+      discard
 
 # ------------------------------------------------------------------------------
 
@@ -107,7 +180,8 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
   of skMethod:
     discard
   of skProc, skConverter, skIterator, skFunc:
-    gen_proc(module, node.sym)
+    #gen_proc(module, node.sym)
+    discard
   of skConst:
     discard
   of skEnumField:
@@ -219,7 +293,8 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkPragmaBlock:
     discard
   of nkProcDef, nkFuncDef, nkMethodDef, nkConverterDef:
-    gen_proc(module, node.sym)
+    if node.sons[genericParamsPos].kind == nkEmpty:
+      gen_proc(module, node.sons[namePos].sym)
   of nkParForStmt:
     discard
   of nkState:
@@ -232,10 +307,11 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
-proc gen_stmt(module: BModule; node: PNode) =
+proc gen_stmt*(module: BModule; node: PNode) =
   let val = gen_expr(module, node)
 
 proc gen_stmt_list*(module: BModule; node: PNode) =
   echo "[] gen_stmt_list"
   for son in node.sons:
+    echo "son ", son.kind
     gen_stmt(module, son)
