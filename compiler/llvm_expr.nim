@@ -119,7 +119,10 @@ proc gen_var_section(module: BModule; node: PNode) =
       let value = def[2]
       gen_single_var(module, def)
 
+# - Control Flow ---------------------------------------------------------------
+
 proc gen_if(module: BModule; node: PNode): ValueRef =
+  # todo: if expression
   assert(module != nil)
   assert(node != nil)
   assert(module.top_scope != nil)
@@ -158,10 +161,7 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
   let entry_bb = llvm.getInsertBlock(module.ll_builder)
   let fun = llvm.getBasicBlockParent(entry_bb)
 
-  let post_bb = llvm.appendBasicBlockInContext(
-    module.ll_context,
-    module.top_scope.proc_val,
-    "post")
+  let post_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "post")
 
   llvm.moveBasicBlockAfter(post_bb, entry_bb)
 
@@ -177,17 +177,11 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
       var cond_bb: BasicBlockRef = entry_bb
       if i != 0:
         # generate label for elif branch
-        elif_bb = llvm.appendBasicBlockInContext(
-          module.ll_context,
-          fun,
-          "elif" & $i)
+        elif_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "elif")
         llvm.moveBasicBlockAfter(elif_bb, entry_bb)
         cond_bb = elif_bb
 
-      let then_bb = llvm.appendBasicBlockInContext(
-        module.ll_context,
-        fun,
-        "then" & $i)
+      let then_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "then")
       llvm.moveBasicBlockAfter(then_bb, cond_bb)
 
       # *** emit cond ***
@@ -197,8 +191,8 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
       let cond_rhs = llvm.constInt(module.ll_bool, 0, 0)
       let cond = llvm.buildICmp(module.ll_builder, llvm.IntNE, cond_lhs, cond_rhs, "")
       if else_bb == nil:
-        # else branch missing :todo:
-        discard llvm.buildCondBr(module.ll_builder, cond, then_bb, else_bb)
+        # else branch missing
+        discard llvm.buildCondBr(module.ll_builder, cond, then_bb, post_bb)
       else:
         discard llvm.buildCondBr(module.ll_builder, cond, then_bb, else_bb)
 
@@ -215,10 +209,7 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
       else_bb = elif_bb
     elif it.kind == nkElse:
       # nkElse
-      else_bb = llvm.appendBasicBlockInContext(
-        module.ll_context,
-        fun,
-        "else")
+      else_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "else")
       llvm.moveBasicBlockAfter(else_bb, entry_bb)
       llvm.positionBuilderAtEnd(module.ll_builder, else_bb)
 
@@ -231,6 +222,78 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
         discard llvm.buildBr(module.ll_builder, post_bb)
 
   llvm.positionBuilderAtEnd(module.ll_builder, post_bb)
+
+proc gen_while(module: BModule; node: PNode) =
+  echo "[] gen_while"
+  #[
+
+  while cond:
+    1
+
+    br cond_bb // terminate
+  cond_bb:
+    br cond, loop_bb, exit_bb
+  loop_bb:
+    1
+    br cond
+  exit_bb:
+
+  ]#
+
+  let entry_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(entry_bb)
+
+  let cond_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "cond")
+  llvm.moveBasicBlockAfter(cond_bb, entry_bb)
+  let loop_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "loop")
+  llvm.moveBasicBlockAfter(loop_bb, cond_bb)
+  let exit_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "exit")
+  llvm.moveBasicBlockAfter(exit_bb, loop_bb)
+
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+
+  if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
+    discard llvm.buildBr(module.ll_builder, cond_bb)
+
+  llvm.positionBuilderAtEnd(module.ll_builder, cond_bb)
+  # emit condition
+  let cond = llvm.constInt(module.ll_bool, 0, 0)
+  discard llvm.buildCondBr(module.ll_builder, cond, loop_bb, exit_bb)
+
+  llvm.positionBuilderAtEnd(module.ll_builder, loop_bb)
+  # emit loop body
+  gen_stmt(module, node[1])
+
+  discard llvm.buildBr(module.ll_builder, cond_bb)
+
+  llvm.positionBuilderAtEnd(module.ll_builder, exit_bb)
+
+proc gen_break(module: BModule; node: PNode) =
+  discard
+
+proc gen_return(module: BModule; node: PNode) =
+  discard
+
+proc gen_block(module: BModule; node: PNode): ValueRef =
+  let entry_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(entry_bb)
+
+  let body_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "block")
+  llvm.moveBasicBlockAfter(body_bb, entry_bb)
+
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
+    discard llvm.buildBr(module.ll_builder, body_bb)
+
+  llvm.positionBuilderAtEnd(module.ll_builder, body_bb)
+
+  gen_stmt(module, node[1])
+
+proc gen_try(module: BModule; node: PNode) =
+  discard
+
+proc gen_raise(module: BModule; node: PNode) =
+  discard
 
 # ------------------------------------------------------------------------------
 
@@ -254,6 +317,7 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
   else: echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
 
 proc gen_expr(module: BModule; node: PNode): ValueRef =
+  echo "gen expr kind: ", node.kind
   case node.kind:
   of nkSym:
     result = gen_sym_expr(module, node)
@@ -288,7 +352,7 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkCheckedFieldExpr:
     discard
   of nkBlockExpr, nkBlockStmt:
-    discard
+    result = gen_block(module, node)
   of nkStmtListExpr:
     discard
   of nkStmtList:
@@ -318,7 +382,7 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkEmpty:
     discard
   of nkWhileStmt:
-    discard
+    gen_while(module, node)
   of nkVarSection, nkLetSection:
     gen_var_section(module, node)
   of nkConstSection:
@@ -328,9 +392,9 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkCaseStmt:
     discard
   of nkReturnStmt:
-    discard
+    gen_return(module, node)
   of nkBreakStmt:
-    discard
+    gen_break(module, node)
   of nkAsgn:
     gen_asgn(module, node)
   of nkFastAsgn:
@@ -340,9 +404,9 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkAsmStmt:
     discard
   of nkTryStmt, nkHiddenTryStmt:
-    discard
+    gen_try(module, node)
   of nkRaiseStmt:
-    discard
+    gen_raise(module, node)
   of nkTypeSection:
     discard
   of nkCommentStmt, nkIteratorDef, nkIncludeStmt, nkImportStmt, nkImportExceptStmt, nkExportStmt, nkExportExceptStmt, nkFromStmt, nkTemplateDef, nkMacroDef, nkStaticStmt:
