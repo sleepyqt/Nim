@@ -68,6 +68,11 @@ type
     RealUNE,                  ## *< True if unordered or not equal
     RealPredicateTrue         ## *< Always true (always folded)
 
+  VerifierFailureAction* = enum
+    AbortProcessAction,       ##  verifier will print to stderr and abort()
+    PrintMessageAction,       ##  verifier will print to stderr and return 1
+    ReturnStatusAction        ##  verifier will just return 1
+
 # ------------------------------------------------------------------------------
 
 var contextCreate*: proc (): ContextRef {.dll.}
@@ -158,6 +163,11 @@ var buildFCmp*: proc(a2: BuilderRef; op: RealPredicate; lhs: ValueRef; rhs: Valu
 
 var getBasicBlockParent*: proc(bb: BasicBlockRef): ValueRef {.dll.}
 var getBasicBlockTerminator*: proc(bb: BasicBlockRef): ValueRef {.dll.}
+
+var verifyModule*: proc(m: ModuleRef; action: VerifierFailureAction; outMessage: cstringArray): Bool {.dll.}
+var verifyFunction*: proc(fn: ValueRef; action: VerifierFailureAction): Bool {.dll.}
+var viewFunctionCFG*: proc(fn: ValueRef) {.dll.}
+var viewFunctionCFGOnly*: proc(fn: ValueRef) {.dll.}
 
 # -----------------------------------------------------------------------------
 
@@ -256,3 +266,8 @@ proc ll_load_dll*: bool =
 
     get_proc(lib, getBasicBlockParent, "LLVMGetBasicBlockParent")
     get_proc(lib, getBasicBlockTerminator, "LLVMGetBasicBlockTerminator")
+
+    get_proc(lib, verifyModule, "LLVMVerifyModule")
+    get_proc(lib, verifyFunction, "LLVMVerifyFunction")
+    get_proc(lib, viewFunctionCFG, "LLVMViewFunctionCFG")
+    get_proc(lib, viewFunctionCFGOnly, "LLVMViewFunctionCFGOnly")

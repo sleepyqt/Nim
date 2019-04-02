@@ -81,6 +81,10 @@ proc gen_proc(module: BModule; sym: PSym) =
   discard llvm.buildRetVoid(module.ll_builder)
 
   module.close_scope()
+
+  #viewFunctionCFG(proc_val)
+  discard verifyFunction(proc_val, PrintMessageAction)
+
   echo "[] end gen_proc: ", sym.name.s
 
 # - Statements -----------------------------------------------------------------
@@ -121,12 +125,14 @@ proc gen_var_section(module: BModule; node: PNode) =
 
 # - Control Flow ---------------------------------------------------------------
 
+proc maybe_terminate(module: BModule; target: BasicBlockRef) =
+  if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
+    discard llvm.buildBr(module.ll_builder, target)
+
 proc gen_if(module: BModule; node: PNode): ValueRef =
   # todo: if expression
   assert(module != nil)
   assert(node != nil)
-  assert(module.top_scope != nil)
-  assert(module.top_scope.proc_val != nil)
 
   #[
   if a: 1
@@ -168,7 +174,6 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
   var else_bb: BasicBlockRef = nil
 
   echo "[] gen_if"
-  #for i in countup(0, sonsLen(node) - 1):
   for i in countdown(sonsLen(node) - 1, 0):
     let it = node.sons[i]
     if it.kind == nkElifBranch:
@@ -203,8 +208,7 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
       gen_stmt(module, it.sons[1])
 
       # terminate basic block if needed
-      if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
-        discard llvm.buildBr(module.ll_builder, post_bb)
+      maybe_terminate(module, post_bb)
 
       else_bb = elif_bb
     elif it.kind == nkElse:
@@ -218,8 +222,7 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
       gen_stmt(module, it.sons[0])
 
       # terminate basic block if needed
-      if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
-        discard llvm.buildBr(module.ll_builder, post_bb)
+      maybe_terminate(module, post_bb)
 
   llvm.positionBuilderAtEnd(module.ll_builder, post_bb)
 
@@ -252,8 +255,7 @@ proc gen_while(module: BModule; node: PNode) =
 
   llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
 
-  if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
-    discard llvm.buildBr(module.ll_builder, cond_bb)
+  maybe_terminate(module, cond_bb)
 
   llvm.positionBuilderAtEnd(module.ll_builder, cond_bb)
   # emit condition
@@ -269,25 +271,68 @@ proc gen_while(module: BModule; node: PNode) =
   llvm.positionBuilderAtEnd(module.ll_builder, exit_bb)
 
 proc gen_break(module: BModule; node: PNode) =
-  discard
+  var break_target: BasicBlockRef
+  if node[0].kind == nkEmpty:
+    # unnamed break
+    break_target = module.top_scope.break_target
+  else:
+    # named break
+    let sym = node[0].sym
+    for scope in module.lookup():
+      if scope.break_name == sym.id:
+        break_target = scope.break_target
+        break
+
+  assert(break_target != nil)
+  discard llvm.buildBr(module.ll_builder, break_target)
 
 proc gen_return(module: BModule; node: PNode) =
   discard
 
 proc gen_block(module: BModule; node: PNode): ValueRef =
+  #[
+  1
+  block:
+    2
+    break
+
+  entry:
+    1
+    br body
+  body:
+    2
+    br exit
+  exit:
+  ]#
+
+  module.open_scope()
+
   let entry_bb = llvm.getInsertBlock(module.ll_builder)
   let fun = llvm.getBasicBlockParent(entry_bb)
 
   let body_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "block")
   llvm.moveBasicBlockAfter(body_bb, entry_bb)
 
+  let exit_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "exit")
+  llvm.moveBasicBlockAfter(exit_bb, body_bb)
+
   llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-  if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
-    discard llvm.buildBr(module.ll_builder, body_bb)
+  maybe_terminate(module, body_bb)
 
   llvm.positionBuilderAtEnd(module.ll_builder, body_bb)
 
+  module.top_scope.break_target = exit_bb
+  if node[0].kind != nkEmpty:
+    # named block
+    module.top_scope.break_name = node[0].sym.id
+
   gen_stmt(module, node[1])
+
+  maybe_terminate(module, exit_bb)
+
+  llvm.positionBuilderAtEnd(module.ll_builder, exit_bb)
+
+  module.close_scope()
 
 proc gen_try(module: BModule; node: PNode) =
   discard

@@ -13,6 +13,8 @@ type
   BScope* = ref object
     parent*: BScope
     proc_val*: ValueRef
+    break_target*: BasicBlockRef
+    break_name*: int
 
   BModule* = ref object of PPassContext
     module_sym*: PSym
@@ -103,6 +105,12 @@ proc open_scope*(module: BModule) =
 proc close_scope*(module: BModule) =
   echo "CLOSE SCOPE"
   module.top_scope = module.top_scope.parent
+
+iterator lookup*(module: BModule): BScope =
+  var scope = module.top_scope
+  while scope != nil:
+    yield scope
+    scope = scope.parent
 
 # cache
 
