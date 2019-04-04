@@ -82,7 +82,7 @@ proc gen_proc(module: BModule; sym: PSym) =
 
   module.close_scope()
 
-  #viewFunctionCFG(proc_val)
+  # viewFunctionCFG(proc_val)
   discard verifyFunction(proc_val, PrintMessageAction)
 
   echo "[] end gen_proc: ", sym.name.s
@@ -290,42 +290,24 @@ proc gen_return(module: BModule; node: PNode) =
   discard
 
 proc gen_block(module: BModule; node: PNode): ValueRef =
-  #[
-  1
-  block:
-    2
-    break
-
-  entry:
-    1
-    br body
-  body:
-    2
-    br exit
-  exit:
-  ]#
+  # todo: named break may introduce basic blocks without predecessors
 
   module.open_scope()
+
+  let block_name = if node[0].kind != nkEmpty: node[0].sym.name.s else: "block"
 
   let entry_bb = llvm.getInsertBlock(module.ll_builder)
   let fun = llvm.getBasicBlockParent(entry_bb)
 
-  let body_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "block")
-  llvm.moveBasicBlockAfter(body_bb, entry_bb)
-
-  let exit_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "exit")
-  llvm.moveBasicBlockAfter(exit_bb, body_bb)
-
-  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-  maybe_terminate(module, body_bb)
-
-  llvm.positionBuilderAtEnd(module.ll_builder, body_bb)
+  let exit_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "exit." & block_name)
+  llvm.moveBasicBlockAfter(exit_bb, entry_bb)
 
   module.top_scope.break_target = exit_bb
   if node[0].kind != nkEmpty:
     # named block
     module.top_scope.break_name = node[0].sym.id
 
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
   gen_stmt(module, node[1])
 
   maybe_terminate(module, exit_bb)
@@ -338,6 +320,9 @@ proc gen_try(module: BModule; node: PNode) =
   discard
 
 proc gen_raise(module: BModule; node: PNode) =
+  discard
+
+proc gen_discard(module: BModule; node: PNode) =
   discard
 
 # ------------------------------------------------------------------------------
@@ -445,9 +430,10 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkFastAsgn:
     discard
   of nkDiscardStmt:
-    discard
+    gen_discard(module, node)
   of nkAsmStmt:
-    discard
+    # todo: debug
+    discard llvm.buildAlloca(module.ll_builder, module.ll_int32, node[0].strVal)
   of nkTryStmt, nkHiddenTryStmt:
     gen_try(module, node)
   of nkRaiseStmt:

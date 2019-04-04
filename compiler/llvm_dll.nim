@@ -5,7 +5,7 @@ when defined(linux):
   {.pragma: dll, cdecl.}
 
 when defined(windows):
-  const llvm_dll = "LLVM-7.0.dll"
+  const llvm_dll = "LLVM-7.0.0.dll"
   {.pragma: dll, stdcall.}
 
 # ------------------------------------------------------------------------------
@@ -169,6 +169,8 @@ var verifyFunction*: proc(fn: ValueRef; action: VerifierFailureAction): Bool {.d
 var viewFunctionCFG*: proc(fn: ValueRef) {.dll.}
 var viewFunctionCFGOnly*: proc(fn: ValueRef) {.dll.}
 
+var buildAlloca*: proc(a2: BuilderRef; ty: TypeRef; name: cstring): ValueRef {.dll.}
+
 # -----------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -271,3 +273,5 @@ proc ll_load_dll*: bool =
     get_proc(lib, verifyFunction, "LLVMVerifyFunction")
     get_proc(lib, viewFunctionCFG, "LLVMViewFunctionCFG")
     get_proc(lib, viewFunctionCFGOnly, "LLVMViewFunctionCFGOnly")
+
+    get_proc(lib, buildAlloca, "LLVMBuildAlloca")
