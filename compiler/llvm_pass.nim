@@ -16,12 +16,13 @@ proc myOpen(graph: ModuleGraph; module_sym: PSym): PPassContext =
   result = newModule(BModuleList(graph.backend), module_sym, graph.config)
 
 proc myClose(graph: ModuleGraph; pass: PPassContext, node: PNode): PNode =
+  echo "myClose"
   result = node
 
 proc myProcess(pass: PPassContext, node: PNode): PNode =
-  #echo "myProcess"
   result = node
   var module = BModule(pass)
+
   if module.module_sym.name.s == "hello": # todo skip for debugging
     if not skipCodegen(module.module_list.config, node):
       let new_node = transformStmt(module.module_list.graph, module.module_sym, node)

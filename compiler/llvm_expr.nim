@@ -10,25 +10,33 @@ proc gen_stmt*(module: BModule; node: PNode)
 
 # ------------------------------------------------------------------------------
 
+proc maybe_terminate(module: BModule; target: BasicBlockRef) =
+  # try to terminate current block
+  if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
+    discard llvm.buildBr(module.ll_builder, target)
+
+# ------------------------------------------------------------------------------
+
 proc gen_int_lit(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
-  assert(ll_type != nil)
+  #assert(ll_type != nil)
 
 proc gen_uint_lit(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
-  assert(ll_type != nil)
+  #assert(ll_type != nil)
 
 proc gen_char_lit(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
-  assert(ll_type != nil)
+  #assert(ll_type != nil)
 
 # ------------------------------------------------------------------------------
 
 proc gen_sym_L_value(module: BModule; node: PNode): ValueRef =
   case node.sym.kind:
   of skVar, skLet:
-    let value_ptr = module.get_value(node.sym.id)
-    result = value_ptr
+    #let value_ptr = module.get_value(node.sym.id)
+    #result = value_ptr
+    discard
   else: echo "gen_sym_L_value: ", node.sym.kind
 
 proc gen_sym_R_value(module: BModule; node: PNode): ValueRef =
@@ -56,7 +64,11 @@ proc gen_R_value(module: BModule; node: PNode): ValueRef =
 # Procedure Types --------------------------------------------------------------
 
 proc gen_proc(module: BModule; sym: PSym) =
-  echo "[] gen_proc: ", sym.name.s
+  echo "******* generate proc: ", sym.name.s, " *******"
+
+  # save current bb for nested procs
+  let incoming_bb = llvm.getInsertBlock(module.ll_builder)
+
   let proc_type = getType(module, sym.typ)
   let m = printTypeToString(proc_type)
   echo "[", m, "]"
@@ -73,10 +85,21 @@ proc gen_proc(module: BModule; sym: PSym) =
     module.top_scope.proc_val,
     "entry")
 
+  let return_bb = llvm.appendBasicBlockInContext(
+    module.ll_context,
+    module.top_scope.proc_val,
+    "return")
+
+  module.top_scope.return_target = return_bb
+
   llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
 
   let new_body = transformBody(module.module_list.graph, sym, cache = false)
   gen_stmt(module, new_body)
+
+  maybe_terminate(module, return_bb)
+  llvm.moveBasicBlockAfter(return_bb, llvm.getInsertBlock(module.ll_builder))
+  llvm.positionBuilderAtEnd(module.ll_builder, return_bb)
 
   discard llvm.buildRetVoid(module.ll_builder)
 
@@ -85,7 +108,25 @@ proc gen_proc(module: BModule; sym: PSym) =
   # viewFunctionCFG(proc_val)
   discard verifyFunction(proc_val, PrintMessageAction)
 
-  echo "[] end gen_proc: ", sym.name.s
+  llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
+
+  echo "******* end gen_proc: ", sym.name.s, " *******"
+
+# ------------------------------------------------------------------------------
+
+proc insert_entry_alloca(module: BModule; typ: TypeRef; name: cstring): ValueRef =
+  # insert `alloca` instruction at function entry point
+  let incoming_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun         = llvm.getBasicBlockParent(incoming_bb)
+  let entry_bb    = llvm.getEntryBasicBlock(fun)
+  let first       = llvm.getFirstInstruction(entry_bb)
+  if first == nil:
+    llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  else:
+    llvm.positionBuilderBefore(module.ll_builder, first)
+  result = llvm.buildAlloca(module.ll_builder, typ, name)
+  # restore position
+  llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
 
 # - Statements -----------------------------------------------------------------
 
@@ -104,7 +145,18 @@ proc gen_single_var(module: BModule; node: PNode) =
     discard
 
   proc gen_local =
-    discard
+    let sym = node[0].sym
+    let typ = node[0].sym.typ
+    let alloca = insert_entry_alloca(module, module.ll_int32, "derp")
+    # initialize variable
+    if node[2].kind == nkEmpty:
+      # todo: initialize with zero
+      discard
+    else:
+      # todo: initialize with exrp
+      #let val = gen_R_value(module, bode[2])
+      #discard llvm.buildStore(module.ll_builder, val, alloca)
+      discard
 
   echo "[] gen_single_var"
   let name = node[0]
@@ -124,10 +176,6 @@ proc gen_var_section(module: BModule; node: PNode) =
       gen_single_var(module, def)
 
 # - Control Flow ---------------------------------------------------------------
-
-proc maybe_terminate(module: BModule; target: BasicBlockRef) =
-  if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
-    discard llvm.buildBr(module.ll_builder, target)
 
 proc gen_if(module: BModule; node: PNode): ValueRef =
   # todo: if expression
@@ -167,7 +215,7 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
   let entry_bb = llvm.getInsertBlock(module.ll_builder)
   let fun = llvm.getBasicBlockParent(entry_bb)
 
-  let post_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "post")
+  let post_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "if.post")
 
   llvm.moveBasicBlockAfter(post_bb, entry_bb)
 
@@ -182,11 +230,11 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
       var cond_bb: BasicBlockRef = entry_bb
       if i != 0:
         # generate label for elif branch
-        elif_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "elif")
+        elif_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "if.elif")
         llvm.moveBasicBlockAfter(elif_bb, entry_bb)
         cond_bb = elif_bb
 
-      let then_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "then")
+      let then_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "if.true")
       llvm.moveBasicBlockAfter(then_bb, cond_bb)
 
       # *** emit cond ***
@@ -213,7 +261,7 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
       else_bb = elif_bb
     elif it.kind == nkElse:
       # nkElse
-      else_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "else")
+      else_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "if.false")
       llvm.moveBasicBlockAfter(else_bb, entry_bb)
       llvm.positionBuilderAtEnd(module.ll_builder, else_bb)
 
@@ -227,7 +275,9 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
   llvm.positionBuilderAtEnd(module.ll_builder, post_bb)
 
 proc gen_while(module: BModule; node: PNode) =
-  echo "[] gen_while"
+  # todo: transf pass for some reason wraps loop in named block and replaces
+  # `continue` with `break`
+
   #[
 
   while cond:
@@ -246,11 +296,11 @@ proc gen_while(module: BModule; node: PNode) =
   let entry_bb = llvm.getInsertBlock(module.ll_builder)
   let fun = llvm.getBasicBlockParent(entry_bb)
 
-  let cond_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "cond")
+  let cond_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "while.cond")
   llvm.moveBasicBlockAfter(cond_bb, entry_bb)
-  let loop_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "loop")
+  let loop_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "while.loop")
   llvm.moveBasicBlockAfter(loop_bb, cond_bb)
-  let exit_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "exit")
+  let exit_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "while.exit")
   llvm.moveBasicBlockAfter(exit_bb, loop_bb)
 
   llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
@@ -266,7 +316,7 @@ proc gen_while(module: BModule; node: PNode) =
   # emit loop body
   gen_stmt(module, node[1])
 
-  discard llvm.buildBr(module.ll_builder, cond_bb)
+  maybe_terminate(module, cond_bb)
 
   llvm.positionBuilderAtEnd(module.ll_builder, exit_bb)
 
@@ -287,7 +337,8 @@ proc gen_break(module: BModule; node: PNode) =
   discard llvm.buildBr(module.ll_builder, break_target)
 
 proc gen_return(module: BModule; node: PNode) =
-  discard
+  let scope = module.proc_scope()
+  discard llvm.buildBr(module.ll_builder, scope.return_target)
 
 proc gen_block(module: BModule; node: PNode): ValueRef =
   # todo: named break may introduce basic blocks without predecessors
@@ -317,7 +368,23 @@ proc gen_block(module: BModule; node: PNode): ValueRef =
   module.close_scope()
 
 proc gen_try(module: BModule; node: PNode) =
-  discard
+  echo "> gen try stmt"
+  module.open_scope()
+
+  let entry_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(entry_bb)
+
+  for son in node:
+    echo "> kind: ", son.kind
+    if son.kind == nkExceptBranch:
+      discard
+    elif son.kind == nkFinally:
+      discard
+    else:
+      discard
+
+  module.close_scope()
+  echo "> try end"
 
 proc gen_raise(module: BModule; node: PNode) =
   discard
@@ -448,7 +515,9 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
     discard
   of nkProcDef, nkFuncDef, nkMethodDef, nkConverterDef:
     if node.sons[genericParamsPos].kind == nkEmpty:
-      gen_proc(module, node.sons[namePos].sym)
+      let sym = node.sons[namePos].sym
+      if (sfBorrow notin sym.flags) and (sym.typ != nil):
+        gen_proc(module, sym)
   of nkParForStmt:
     discard
   of nkState:

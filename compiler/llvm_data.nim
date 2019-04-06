@@ -13,8 +13,10 @@ type
   BScope* = ref object
     parent*: BScope
     proc_val*: ValueRef
-    break_target*: BasicBlockRef
-    break_name*: int
+    break_target*: BasicBlockRef # target for break statement
+    break_name*: int # target for named break
+    unwind_target*: BasicBlockRef
+    return_target*: BasicBlockRef
 
   BModule* = ref object of PPassContext
     module_sym*: PSym
@@ -22,15 +24,17 @@ type
     module_list*: BModuleList
     file_name*: AbsoluteFile
     full_file_name*: AbsoluteFile
+    init_proc*: ValueRef # the `main` module procedure
     # cache common types
-    ll_void*, ll_bool*: TypeRef
+    ll_void*, ll_bool*, ll_logic_bool*: TypeRef
+    ll_char*: TypeRef
     ll_int*, ll_int8*, ll_int16*, ll_int32*, ll_int64*: TypeRef
     ll_float32*, ll_float64*: TypeRef
+    ll_cstring*, ll_nim_string*: TypeRef
+    ll_pointer*: TypeRef
     # cache for LLVM values and types
     type_cache*: Table[SigHash, TypeRef]
     value_cache*: Table[int, ValueRef]
-    # ☺
-    training_wheels*: string
     # llvm stuff
     ll_context*: ContextRef
     ll_module*: ModuleRef
@@ -70,7 +74,9 @@ proc setup_codegen(module: var BModule) =
   module.ll_machine = llvm.createTargetMachine(target, triple, cpu, features, opt_level, reloc, model)
   # --- cache types ---
   module.ll_void = llvm.voidTypeInContext(module.ll_context)
+  module.ll_char = llvm.int8TypeInContext(module.ll_context)
   module.ll_bool = llvm.int8TypeInContext(module.ll_context)
+  module.ll_logic_bool = llvm.int1TypeInContext(module.ll_context)
   module.ll_int = llvm.int64TypeInContext(module.ll_context) # todo platform specific
   module.ll_int8 = llvm.int8TypeInContext(module.ll_context)
   module.ll_int16 = llvm.int16TypeInContext(module.ll_context)
@@ -78,11 +84,28 @@ proc setup_codegen(module: var BModule) =
   module.ll_int64 = llvm.int64TypeInContext(module.ll_context)
   module.ll_float32 = llvm.floatTypeInContext(module.ll_context)
   module.ll_float64 = llvm.doubleTypeInContext(module.ll_context)
+  module.ll_cstring = llvm.pointerType(module.ll_char, 0)
+  module.ll_pointer = llvm.pointerType(module.ll_void, 0)
+  # module.ll_nim_string = todo
 
   assert(module.ll_context != nil)
   assert(module.ll_builder != nil)
   assert(module.ll_module != nil)
   assert(module.ll_machine != nil)
+
+proc setup_module(module: BModule) =
+  module.init_proc = llvm.addFunction(
+    module.ll_module,
+    module.module_sym.name.s & "_module_main",
+    llvm.functionType(module.ll_void, nil, 0, Bool 0))
+
+  let entry_bb = llvm.appendBasicBlockInContext(
+    module.ll_context,
+    module.init_proc,
+    "module_entry")
+
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  module.top_scope = BScope(proc_val: module.init_proc, parent: nil)
 
 proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): BModule =
   new(result)
@@ -92,6 +115,7 @@ proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): 
   result.value_cache = init_table[int, ValueRef]()
   result.file_name = AbsoluteFile toFullPath(config, FileIndex module_sym.position)
   setup_codegen(result)
+  setup_module(result)
   module_list.modules.add(result)
 
 # scopes
@@ -111,6 +135,11 @@ iterator lookup*(module: BModule): BScope =
   while scope != nil:
     yield scope
     scope = scope.parent
+
+proc proc_scope*(module: BModule): BScope =
+  for scope in module.lookup():
+    if scope.proc_val != nil:
+      return scope
 
 # cache
 

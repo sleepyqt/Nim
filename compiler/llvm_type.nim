@@ -10,15 +10,28 @@ proc get_array_type*(module: BModule; typ: PType): TypeRef =
   discard
 
 proc get_object_type*(module: BModule; typ: PType): TypeRef =
-  discard
+  let name = typ.sym.name.s
+  result = llvm.structCreateNamed(module.ll_context, name)
+
+  var fields: seq[TypeRef]
+
+  proc gen_fields(node: PNode) =
+    case node.kind:
+    of nkRecList: (for son in node: gen_fields(son))
+    of nkSym: (if node.sym.typ.kind != tyEmpty: fields.add get_type(module, node.sym.typ))
+    else: discard
+
+  gen_fields(typ.n)
+  let fields_ptr = if fields.len == 0: nil else: addr fields[0]
+  llvm.structSetBody(result, fields_ptr, cuint fields.len, 0)
 
 # String Types -----------------------------------------------------------------
 
 proc get_cstring_type*(module: BModule; typ: PType): TypeRef =
-  discard
+  module.ll_cstring
 
 proc get_nim_string_type*(module: BModule; typ: PType): TypeRef =
-  discard
+  module.ll_nim_string
 
 # Procedure Types --------------------------------------------------------------
 
@@ -41,6 +54,12 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
 
 # ------------------------------------------------------------------------------
 
+proc get_enum_type(module: BModule; typ: PType): TypeRef =
+  discard
+
+proc get_range_type(module: BModule; typ: PType): TypeRef =
+  discard
+
 proc get_type*(module: BModule; typ: PType): TypeRef =
   ## maps nim type LLVM type
   assert module != nil
@@ -57,4 +76,5 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyTuple: result = get_object_type(module, typ)
   of tyPointer, tyNil: result = module.ll_void
   of tyProc: result = get_proc_type(module, typ)
+  of tyRange: result = get_range_type(module, typ)
   else: echo "get_type: unknown type kind: ", typ.kind

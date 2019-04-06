@@ -89,6 +89,11 @@ var floatTypeInContext*: proc(c: ContextRef): TypeRef {.dll.}
 var doubleTypeInContext*: proc(c: ContextRef): TypeRef {.dll.}
 var voidTypeInContext*: proc(c: ContextRef): TypeRef {.dll.}
 
+var pointerType*: proc(elementType: TypeRef; addressSpace: cuint): TypeRef {.dll.}
+var arrayType*: proc(elementType: TypeRef; elementCount: cuint): TypeRef {.dll.}
+var getElementType*: proc(ty: TypeRef): TypeRef {.dll.}
+var getArrayLength*: proc(arrayTy: TypeRef): cuint {.dll.}
+
 var getTargetFromTriple*: proc(triple: cstring; t: ptr TargetRef; errorMessage: ptr cstring): Bool {.dll.}
 var disposeMessage*: proc(message: cstring) {.dll.}
 var createTargetMachine*: proc(t: TargetRef; triple: cstring; cpu: cstring; features: cstring; level: CodeGenOptLevel; reloc: RelocMode; codeModel: CodeModel): TargetMachineRef {.dll.}
@@ -135,6 +140,8 @@ var moveBasicBlockBefore*: proc(bb: BasicBlockRef; movePos: BasicBlockRef) {.dll
 var moveBasicBlockAfter*: proc(bb: BasicBlockRef; movePos: BasicBlockRef) {.dll.}
 var getFirstInstruction*: proc(bb: BasicBlockRef): ValueRef {.dll.}
 var getLastInstruction*: proc(bb: BasicBlockRef): ValueRef {.dll.}
+var getEntryBasicBlock*: proc(fn: ValueRef): BasicBlockRef {.dll.}
+var deleteBasicBlock*: proc(bb: BasicBlockRef) {.dll.}
 
 var createBuilderInContext*: proc(c: ContextRef): BuilderRef {.dll.}
 var positionBuilder*: proc(builder: BuilderRef; `block`: BasicBlockRef; instr: ValueRef) {.dll.}
@@ -171,7 +178,24 @@ var viewFunctionCFGOnly*: proc(fn: ValueRef) {.dll.}
 
 var buildAlloca*: proc(a2: BuilderRef; ty: TypeRef; name: cstring): ValueRef {.dll.}
 
-# -----------------------------------------------------------------------------
+var buildResume*: proc(b: BuilderRef; exn: ValueRef): ValueRef {.dll.}
+var buildLandingPad*: proc(b: BuilderRef; ty: TypeRef; persFn: ValueRef; numClauses: cuint; name: cstring): ValueRef {.dll.}
+var buildCleanupRet*: proc(b: BuilderRef; catchPad: ValueRef; bb: BasicBlockRef): ValueRef {.dll.}
+var buildCatchRet*: proc(b: BuilderRef; catchPad: ValueRef; bb: BasicBlockRef): ValueRef {.dll.}
+var buildCatchPad*: proc(b: BuilderRef; parentPad: ValueRef; args: ptr ValueRef; numArgs: cuint; name: cstring): ValueRef {.dll.}
+var buildCleanupPad*: proc(b: BuilderRef; parentPad: ValueRef; args: ptr ValueRef; numArgs: cuint; name: cstring): ValueRef {.dll.}
+var buildCatchSwitch*: proc(b: BuilderRef; parentPad: ValueRef; unwindBB: BasicBlockRef; numHandlers: cuint; name: cstring): ValueRef {.dll.}
+var addCase*: proc(switch: ValueRef; onVal: ValueRef; dest: BasicBlockRef) {.dll.}
+var addDestination*: proc(indirectBr: ValueRef; dest: BasicBlockRef) {.dll.}
+var getNumClauses*: proc(landingPad: ValueRef): cuint {.dll.}
+var getClause*: proc(landingPad: ValueRef; idx: cuint): ValueRef {.dll.}
+var addClause*: proc(landingPad: ValueRef; clauseVal: ValueRef) {.dll.}
+var isCleanup*: proc(landingPad: ValueRef): Bool {.dll.}
+var setCleanup*: proc(landingPad: ValueRef; val: Bool) {.dll.}
+var addHandler*: proc(catchSwitch: ValueRef; dest: BasicBlockRef) {.dll.}
+var getNumHandlers*: proc(catchSwitch: ValueRef): cuint {.dll.}
+
+# ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
   fun = cast[type(fun)](symAddr(lib, name))
@@ -194,6 +218,11 @@ proc ll_load_dll*: bool =
     get_proc(lib, floatTypeInContext, "LLVMFloatTypeInContext")
     get_proc(lib, doubleTypeInContext, "LLVMDoubleTypeInContext")
     get_proc(lib, voidTypeInContext, "LLVMVoidTypeInContext")
+
+    get_proc(lib, pointerType, "LLVMPointerType")
+    get_proc(lib, arrayType, "LLVMArrayType")
+    get_proc(lib, getElementType, "LLVMGetElementType")
+    get_proc(lib, getArrayLength, "LLVMGetArrayLength")
 
     get_proc(lib, getTargetFromTriple, "LLVMGetTargetFromTriple")
     get_proc(lib, disposeMessage, "LLVMDisposeMessage")
@@ -240,6 +269,8 @@ proc ll_load_dll*: bool =
     get_proc(lib, moveBasicBlockAfter, "LLVMMoveBasicBlockAfter")
     get_proc(lib, getFirstInstruction, "LLVMGetFirstInstruction")
     get_proc(lib, getLastInstruction, "LLVMGetLastInstruction")
+    get_proc(lib, getEntryBasicBlock, "LLVMGetEntryBasicBlock")
+    get_proc(lib, deleteBasicBlock, "LLVMDeleteBasicBlock")
 
     get_proc(lib, createBuilderInContext, "LLVMCreateBuilderInContext")
     get_proc(lib, positionBuilder, "LLVMPositionBuilder")
@@ -275,3 +306,20 @@ proc ll_load_dll*: bool =
     get_proc(lib, viewFunctionCFGOnly, "LLVMViewFunctionCFGOnly")
 
     get_proc(lib, buildAlloca, "LLVMBuildAlloca")
+
+    get_proc(lib, buildResume, "LLVMBuildResume")
+    get_proc(lib, buildLandingPad, "LLVMBuildLandingPad")
+    get_proc(lib, buildCleanupRet, "LLVMBuildCleanupRet")
+    get_proc(lib, buildCatchRet, "LLVMBuildCatchRet")
+    get_proc(lib, buildCatchPad, "LLVMBuildCatchPad")
+    get_proc(lib, buildCleanupPad, "LLVMBuildCleanupPad")
+    get_proc(lib, buildCatchSwitch, "LLVMBuildCatchSwitch")
+    get_proc(lib, addCase, "LLVMAddCase")
+    get_proc(lib, addDestination, "LLVMAddDestination")
+    get_proc(lib, getNumClauses, "LLVMGetNumClauses")
+    get_proc(lib, getClause, "LLVMGetClause")
+    get_proc(lib, addClause, "LLVMAddClause")
+    get_proc(lib, isCleanup, "LLVMIsCleanup ")
+    get_proc(lib, setCleanup, "LLVMSetCleanup")
+    get_proc(lib, addHandler, "LLVMAddHandler")
+    get_proc(lib, getNumHandlers, "LLVMGetNumHandlers")
