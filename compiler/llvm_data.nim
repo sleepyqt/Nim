@@ -1,12 +1,11 @@
 from modulegraphs import PPassContext, ModuleGraph
-from ast import PSym
+from ast import PSym, routineKinds
 from options import ConfigRef
-from sighashes import SigHash, hash, `==`
+from sighashes import SigHash, hash, `==`, hashProc, hashNonProc, `$`
 from msgs import toFullPath
 from lineinfos import FileIndex
 from pathutils import AbsoluteFile
 import tables
-
 import llvm_dll as llvm
 
 type
@@ -45,11 +44,15 @@ type
     modules*: seq[BModule]
     graph*: ModuleGraph
     config*: ConfigRef
+    sig_collisions*: CountTable[SigHash]
+
+# ------------------------------------------------------------------------------
 
 proc newModuleList*(graph: ModuleGraph): BModuleList =
   new(result)
   result.graph = graph
   result.config = graph.config
+  result.sig_collisions = initCountTable[SigHash]()
 
 proc setup_codegen(module: var BModule) =
   module.ll_context = llvm.contextCreate()
@@ -118,7 +121,7 @@ proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): 
   setup_module(result)
   module_list.modules.add(result)
 
-# scopes
+# Scope Stack ------------------------------------------------------------------
 
 proc open_scope*(module: BModule) =
   echo "OPEN SCOPE"
@@ -141,7 +144,7 @@ proc proc_scope*(module: BModule): BScope =
     if scope.proc_val != nil:
       return scope
 
-# cache
+# Symbol Table -----------------------------------------------------------------
 
 proc add_type*(module: BModule; sig: SigHash; typ: TypeRef) =
   module.type_cache.add(sig, typ)
@@ -154,3 +157,22 @@ proc add_value*(module: BModule; id: int; val: ValueRef) =
 
 proc get_value*(module: BModule; id: int): ValueRef =
   module.value_cache[id]
+
+# Name Mangling ----------------------------------------------------------------
+
+proc mangle*(name: string): string =
+  name # todo
+
+proc mangle_name*(module: BModule; sym: PSym): string =
+  let sig = if sym.kind in routineKinds and sym.typ != nil:
+    hashProc(sym)
+  else:
+    hashNonProc(sym)
+
+  result.add mangle(sym.name.s)
+  result.add $sig
+
+  let counter = module.module_list.sig_collisions.getOrDefault(sig)
+  if counter != 0:
+    result.add "_" & $(counter + 1)
+  module.module_list.sig_collisions.inc(sig)

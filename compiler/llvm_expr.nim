@@ -74,7 +74,7 @@ proc gen_proc(module: BModule; sym: PSym) =
   echo "[", m, "]"
   disposeMessage(m)
 
-  let proc_name = sym.name.s & $sym.id
+  let proc_name = mangle_name(module, sym)
   let proc_val = llvm.addFunction(module.ll_module, proc_name, proc_type)
 
   module.open_scope()
