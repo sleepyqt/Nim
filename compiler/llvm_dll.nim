@@ -73,6 +73,30 @@ type
     PrintMessageAction,       ##  verifier will print to stderr and return 1
     ReturnStatusAction        ##  verifier will just return 1
 
+  Opcode* = enum
+    #  Terminator Instructions
+    Ret = 1, Br = 2, Switch = 3, IndirectBr = 4, Invoke = 5,
+    #  removed 6 due to API changes
+    Unreachable = 7,
+    #  Standard Binary Operators
+    Add = 8, FAdd = 9, Sub = 10, FSub = 11, Mul = 12, FMul = 13, UDiv = 14, SDiv = 15, FDiv = 16,
+    URem = 17, SRem = 18, FRem = 19,
+    #  Logical Operators
+    Shl = 20, LShr = 21, AShr = 22, And = 23, Or = 24, Xor = 25,
+    #  Memory Operators
+    Alloca = 26, Load = 27, Store = 28, GetElementPtr = 29,
+    #  Cast Operators
+    Trunc = 30, ZExt = 31, SExt = 32, FPToUI = 33, FPToSI = 34, UIToFP = 35, SIToFP = 36,
+    FPTrunc = 37, FPExt = 38, PtrToInt = 39, IntToPtr = 40, BitCast = 41, ICmp = 42, FCmp = 43,
+    PHI = 44, Call = 45, Select = 46, UserOp1 = 47, UserOp2 = 48, VAArg = 49, ExtractElement = 50,
+    InsertElement = 51, ShuffleVector = 52, ExtractValue = 53, InsertValue = 54,
+    #  Atomic operators
+    Fence = 55, AtomicCmpXchg = 56, AtomicRMW = 57,
+    #  Exception Handling Operators
+    Resume = 58, LandingPad = 59, AddrSpaceCast = 60,
+    #  Other Operators
+    CleanupRet = 61, CatchRet = 62, CatchPad = 63, CleanupPad = 64, CatchSwitch = 65
+
 # ------------------------------------------------------------------------------
 
 var contextCreate*: proc (): ContextRef {.dll.}
@@ -176,8 +200,6 @@ var verifyFunction*: proc(fn: ValueRef; action: VerifierFailureAction): Bool {.d
 var viewFunctionCFG*: proc(fn: ValueRef) {.dll.}
 var viewFunctionCFGOnly*: proc(fn: ValueRef) {.dll.}
 
-var buildAlloca*: proc(a2: BuilderRef; ty: TypeRef; name: cstring): ValueRef {.dll.}
-
 var buildResume*: proc(b: BuilderRef; exn: ValueRef): ValueRef {.dll.}
 var buildLandingPad*: proc(b: BuilderRef; ty: TypeRef; persFn: ValueRef; numClauses: cuint; name: cstring): ValueRef {.dll.}
 var buildCleanupRet*: proc(b: BuilderRef; catchPad: ValueRef; bb: BasicBlockRef): ValueRef {.dll.}
@@ -195,6 +217,71 @@ var setCleanup*: proc(landingPad: ValueRef; val: Bool) {.dll.}
 var addHandler*: proc(catchSwitch: ValueRef; dest: BasicBlockRef) {.dll.}
 var getNumHandlers*: proc(catchSwitch: ValueRef): cuint {.dll.}
 
+var buildAlloca*: proc(a2: BuilderRef; ty: TypeRef; name: cstring): ValueRef {.dll.}
+var buildArrayAlloca*: proc(a2: BuilderRef; ty: TypeRef; val: ValueRef; name: cstring): ValueRef {.dll.}
+var buildFree*: proc(a2: BuilderRef; pointerVal: ValueRef): ValueRef {.dll.}
+var buildLoad*: proc(a2: BuilderRef; pointerVal: ValueRef; name: cstring): ValueRef {.dll.}
+var buildStore*: proc(a2: BuilderRef; val: ValueRef; `ptr`: ValueRef): ValueRef {.dll.}
+var buildGEP*: proc(b: BuilderRef; pointer: ValueRef; indices: ptr ValueRef; numIndices: cuint; name: cstring): ValueRef {.dll.}
+var buildInBoundsGEP*: proc(b: BuilderRef; pointer: ValueRef; indices: ptr ValueRef; numIndices: cuint; name: cstring): ValueRef {.dll.}
+var buildStructGEP*: proc(b: BuilderRef; pointer: ValueRef; idx: cuint; name: cstring): ValueRef {.dll.}
+var buildGlobalString*: proc(b: BuilderRef; str: cstring; name: cstring): ValueRef {.dll.}
+var buildGlobalStringPtr*: proc(b: BuilderRef; str: cstring; name: cstring): ValueRef {.dll.}
+var buildAdd*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildNSWAdd*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildNUWAdd*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildFAdd*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildSub*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildNSWSub*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildNUWSub*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildFSub*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildMul*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildNSWMul*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildNUWMul*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildFMul*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildUDiv*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildExactUDiv*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildSDiv*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildExactSDiv*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildFDiv*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildURem*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildSRem*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildFRem*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildShl*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildLShr*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildAShr*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildAnd*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildOr*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildXor*: proc(a2: BuilderRef; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildBinOp*: proc(b: BuilderRef; op: Opcode; lhs: ValueRef; rhs: ValueRef; name: cstring): ValueRef {.dll.}
+var buildNeg*: proc(a2: BuilderRef; v: ValueRef; name: cstring): ValueRef {.dll.}
+var buildNSWNeg*: proc(b: BuilderRef; v: ValueRef; name: cstring): ValueRef {.dll.}
+var buildNUWNeg*: proc(b: BuilderRef; v: ValueRef; name: cstring): ValueRef {.dll.}
+var buildFNeg*: proc(a2: BuilderRef; v: ValueRef; name: cstring): ValueRef {.dll.}
+var buildNot*: proc(a2: BuilderRef; v: ValueRef; name: cstring): ValueRef {.dll.}
+var buildTrunc*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildZExt*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildSExt*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildFPToUI*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildFPToSI*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildUIToFP*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildSIToFP*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildFPTrunc*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildFPExt*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildPtrToInt*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildIntToPtr*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildBitCast*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildAddrSpaceCast*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildZExtOrBitCast*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildSExtOrBitCast*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildTruncOrBitCast*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildCast*: proc(b: BuilderRef; op: Opcode; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildPointerCast*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildIntCast*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+var buildFPCast*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+
+var buildCall*: proc(a2: BuilderRef; fn: ValueRef; args: ptr ValueRef; numArgs: cuint; name: cstring): ValueRef {.dll.}
+var getNamedFunction*: proc(m: ModuleRef; name: cstring): ValueRef {.dll.}
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -305,8 +392,6 @@ proc ll_load_dll*: bool =
     get_proc(lib, viewFunctionCFG, "LLVMViewFunctionCFG")
     get_proc(lib, viewFunctionCFGOnly, "LLVMViewFunctionCFGOnly")
 
-    get_proc(lib, buildAlloca, "LLVMBuildAlloca")
-
     get_proc(lib, buildResume, "LLVMBuildResume")
     get_proc(lib, buildLandingPad, "LLVMBuildLandingPad")
     get_proc(lib, buildCleanupRet, "LLVMBuildCleanupRet")
@@ -323,3 +408,69 @@ proc ll_load_dll*: bool =
     get_proc(lib, setCleanup, "LLVMSetCleanup")
     get_proc(lib, addHandler, "LLVMAddHandler")
     get_proc(lib, getNumHandlers, "LLVMGetNumHandlers")
+
+    get_proc(lib, buildAlloca, "LLVMBuildAlloca")
+    get_proc(lib, buildArrayAlloca, "LLVMBuildArrayAlloca")
+    get_proc(lib, buildFree, "LLVMBuildFree")
+    get_proc(lib, buildLoad, "LLVMBuildLoad")
+    get_proc(lib, buildStore, "LLVMBuildStore")
+    get_proc(lib, buildGEP, "LLVMBuildGEP")
+    get_proc(lib, buildInBoundsGEP, "LLVMBuildInBoundsGEP")
+    get_proc(lib, buildStructGEP, "LLVMBuildStructGEP")
+    get_proc(lib, buildGlobalString, "LLVMBuildGlobalString")
+    get_proc(lib, buildGlobalStringPtr, "LLVMBuildGlobalStringPtr")
+    get_proc(lib, buildAdd, "LLVMBuildAdd")
+    get_proc(lib, buildNSWAdd, "LLVMBuildNSWAdd")
+    get_proc(lib, buildNUWAdd, "LLVMBuildNUWAdd")
+    get_proc(lib, buildFAdd, "LLVMBuildFAdd")
+    get_proc(lib, buildSub, "LLVMBuildSub")
+    get_proc(lib, buildNSWSub, "LLVMBuildNSWSub")
+    get_proc(lib, buildNUWSub, "LLVMBuildNUWSub")
+    get_proc(lib, buildFSub, "LLVMBuildFSub")
+    get_proc(lib, buildMul, "LLVMBuildMul")
+    get_proc(lib, buildNSWMul, "LLVMBuildNSWMul")
+    get_proc(lib, buildNUWMul, "LLVMBuildNUWMul")
+    get_proc(lib, buildFMul, "LLVMBuildFMul")
+    get_proc(lib, buildUDiv, "LLVMBuildUDiv")
+    get_proc(lib, buildExactUDiv, "LLVMBuildExactUDiv")
+    get_proc(lib, buildSDiv, "LLVMBuildSDiv")
+    get_proc(lib, buildExactSDiv, "LLVMBuildExactSDiv")
+    get_proc(lib, buildFDiv, "LLVMBuildFDiv")
+    get_proc(lib, buildURem, "LLVMBuildURem")
+    get_proc(lib, buildSRem, "LLVMBuildSRem")
+    get_proc(lib, buildFRem, "LLVMBuildFRem")
+    get_proc(lib, buildShl, "LLVMBuildShl")
+    get_proc(lib, buildLShr, "LLVMBuildLShr")
+    get_proc(lib, buildAShr, "LLVMBuildAShr")
+    get_proc(lib, buildAnd, "LLVMBuildAnd")
+    get_proc(lib, buildOr, "LLVMBuildOr")
+    get_proc(lib, buildXor, "LLVMBuildXor")
+    get_proc(lib, buildBinOp, "LLVMBuildBinOp")
+    get_proc(lib, buildNeg, "LLVMBuildNeg")
+    get_proc(lib, buildNSWNeg, "LLVMBuildNSWNeg")
+    get_proc(lib, buildNUWNeg, "LLVMBuildNUWNeg")
+    get_proc(lib, buildFNeg, "LLVMBuildFNeg")
+    get_proc(lib, buildNot, "LLVMBuildNot")
+    get_proc(lib, buildTrunc, "LLVMBuildTrunc")
+    get_proc(lib, buildZExt, "LLVMBuildZExt")
+    get_proc(lib, buildSExt, "LLVMBuildSExt")
+    get_proc(lib, buildFPToUI, "LLVMBuildFPToUI")
+    get_proc(lib, buildFPToSI, "LLVMBuildFPToSI")
+    get_proc(lib, buildUIToFP, "LLVMBuildUIToFP")
+    get_proc(lib, buildSIToFP, "LLVMBuildSIToFP")
+    get_proc(lib, buildFPTrunc, "LLVMBuildFPTrunc")
+    get_proc(lib, buildFPExt, "LLVMBuildFPExt")
+    get_proc(lib, buildPtrToInt, "LLVMBuildPtrToInt")
+    get_proc(lib, buildIntToPtr, "LLVMBuildIntToPtr")
+    get_proc(lib, buildBitCast, "LLVMBuildBitCast")
+    get_proc(lib, buildAddrSpaceCast, "LLVMBuildAddrSpaceCast")
+    get_proc(lib, buildZExtOrBitCast, "LLVMBuildZExtOrBitCast")
+    get_proc(lib, buildSExtOrBitCast, "LLVMBuildSExtOrBitCast")
+    get_proc(lib, buildTruncOrBitCast, "LLVMBuildTruncOrBitCast")
+    get_proc(lib, buildCast, "LLVMBuildCast")
+    get_proc(lib, buildPointerCast, "LLVMBuildPointerCast")
+    get_proc(lib, buildIntCast, "LLVMBuildIntCast")
+    get_proc(lib, buildFPCast, "LLVMBuildFPCast")
+
+    get_proc(lib, buildCall, "LLVMBuildCall")
+    get_proc(lib, getNamedFunction, "LLVMGetNamedFunction")

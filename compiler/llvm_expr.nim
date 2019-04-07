@@ -1,4 +1,4 @@
-import ast
+import ast, types
 from transf import transformBody
 import llvm_data, llvm_type
 import llvm_dll as llvm
@@ -15,32 +15,80 @@ proc maybe_terminate(module: BModule; target: BasicBlockRef) =
   if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
     discard llvm.buildBr(module.ll_builder, target)
 
+proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
+  case typ.kind:
+  of tyInt, tyUint:
+    let val = llvm.constInt(module.ll_int, culonglong 0, Bool 0)
+    discard llvm.buildStore(module.ll_builder, val, alloca)
+  of tyInt8, tyUint8:
+    let val = llvm.constInt(module.ll_int8, culonglong 0, Bool 0)
+    discard llvm.buildStore(module.ll_builder, val, alloca)
+  of tyInt16:
+    let val = llvm.constInt(module.ll_int16, culonglong 0, Bool 0)
+    discard llvm.buildStore(module.ll_builder, val, alloca)
+  of tyInt32, tyUint32:
+    let val = llvm.constInt(module.ll_int32, culonglong 0, Bool 0)
+    discard llvm.buildStore(module.ll_builder, val, alloca)
+  of tyInt64, tyUInt64:
+    let val = llvm.constInt(module.ll_int64, culonglong 0, Bool 0)
+    discard llvm.buildStore(module.ll_builder, val, alloca)
+  of tyObject:
+    let adr = llvm.buildBitCast(module.ll_builder, alloca, module.ll_pointer, "")
+    let size = getSize(module.module_list.config, typ)
+    call_memset(module, adr, 0, int64 size)
+  else: discard
+
 # ------------------------------------------------------------------------------
 
 proc gen_int_lit(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
-  #assert(ll_type != nil)
+  result = llvm.constInt(ll_type, culonglong node.intVal, Bool 1)
 
 proc gen_uint_lit(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
-  #assert(ll_type != nil)
+  result = llvm.constInt(ll_type, culonglong node.intVal, Bool 0)
 
 proc gen_char_lit(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
-  #assert(ll_type != nil)
+  result = llvm.constInt(ll_type, culonglong node.intVal, Bool 0)
+
+proc gen_float_lit(module: BModule; node: PNode): ValueRef =
+  discard
 
 # ------------------------------------------------------------------------------
 
 proc gen_sym_L_value(module: BModule; node: PNode): ValueRef =
   case node.sym.kind:
   of skVar, skLet:
-    #let value_ptr = module.get_value(node.sym.id)
-    #result = value_ptr
-    discard
+    result = module.get_value(node.sym.id)
   else: echo "gen_sym_L_value: ", node.sym.kind
 
 proc gen_sym_R_value(module: BModule; node: PNode): ValueRef =
+  case node.sym.kind:
+  of skVar, skLet:
+    let alloca = gen_sym_L_value(module, node)
+    result = llvm.buildLoad(module.ll_builder, alloca, "")
+  else: echo "gen_sym_R_value: ", node.sym.kind
+
+# ------------------------------------------------------------------------------
+
+proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
+  case op:
+  of mAddI: discard
+  of mSubI: discard
+  of mMulI: discard
+  of mDivI: discard
+  of mModI: discard
+  else: echo "unknown magic: ", op
+
+proc gen_call_expr(module: BModule; node: PNode): ValueRef =
   discard
+
+proc gen_call(module: BModule; node: PNode): ValueRef =
+  if node[0].kind == nkSym and node[0].sym.magic != mNone:
+    result = gen_magic_expr(module, node, node[0].sym.magic)
+  else:
+    result = gen_call_expr(module, node)
 
 # ------------------------------------------------------------------------------
 
@@ -147,16 +195,19 @@ proc gen_single_var(module: BModule; node: PNode) =
   proc gen_local =
     let sym = node[0].sym
     let typ = node[0].sym.typ
-    let alloca = insert_entry_alloca(module, module.ll_int32, "derp")
+    let ll_type = get_type(module, typ)
+    let name = mangle_local_name(module, sym)
+    let alloca = insert_entry_alloca(module, ll_type, name)
     # initialize variable
     if node[2].kind == nkEmpty:
-      # todo: initialize with zero
-      discard
+      gen_default_init(module, typ, alloca)
     else:
-      # todo: initialize with exrp
-      #let val = gen_R_value(module, bode[2])
-      #discard llvm.buildStore(module.ll_builder, val, alloca)
-      discard
+      # initialize with exrp
+      let val = gen_R_value(module, node[2])
+      assert(val != nil, "local val init")
+      discard llvm.buildStore(module.ll_builder, val, alloca)
+    echo "adding local: ", sym.id
+    module.add_value(sym.id, alloca)
 
   echo "[] gen_single_var"
   let name = node[0]
@@ -420,12 +471,18 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
     result = gen_sym_expr(module, node)
   of nkNilLit:
     discard
-  of nkStrLit..nkTripleStrLit:
+  of nkStrLit .. nkTripleStrLit:
     discard
-  of nkIntLit..nkUInt64Lit, nkFloatLit..nkFloat128Lit, nkCharLit:
-    discard
+  of nkIntLit .. nkInt64Lit:
+    result = gen_int_lit(module, node)
+  of nkUintLit .. nkUInt64Lit:
+    result = gen_uint_lit(module, node)
+  of nkFloatLit..nkFloat64Lit:
+    result = gen_float_lit(module, node)
+  of nkCharLit:
+    result = gen_char_lit(module, node)
   of nkCall, nkHiddenCallConv, nkInfix, nkPrefix, nkPostfix, nkCommand, nkCallStrLit:
-    discard
+    result = gen_call(module, node)
   of nkCurly:
     discard
   of nkBracket:

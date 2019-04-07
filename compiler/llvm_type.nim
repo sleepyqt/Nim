@@ -1,29 +1,40 @@
 import ast, types
 import llvm_data
 import llvm_dll as llvm
+from sighashes import hashType
 
 proc get_type*(module: BModule; typ: PType): TypeRef
 
 # Composite Types --------------------------------------------------------------
 
 proc get_array_type*(module: BModule; typ: PType): TypeRef =
-  discard
+  let sig = hashType(typ)
+  result = module.get_type(sig)
+  if result == nil:
+    let elem_type = get_type(module, elemType(typ))
+    let elem_count = cuint lengthOrd(module.module_list.config, typ)
+    result = llvm.arrayType(elem_type, elem_count)
+    module.add_type(sig, result)
 
 proc get_object_type*(module: BModule; typ: PType): TypeRef =
-  let name = typ.sym.name.s
-  result = llvm.structCreateNamed(module.ll_context, name)
+  let sig = hashType(typ)
+  result = module.get_type(sig)
+  if result == nil:
+    let name = typ.sym.name.s
+    result = llvm.structCreateNamed(module.ll_context, name)
+    module.add_type(sig, result)
 
-  var fields: seq[TypeRef]
+    var fields: seq[TypeRef]
 
-  proc gen_fields(node: PNode) =
-    case node.kind:
-    of nkRecList: (for son in node: gen_fields(son))
-    of nkSym: (if node.sym.typ.kind != tyEmpty: fields.add get_type(module, node.sym.typ))
-    else: discard
+    proc gen_fields(node: PNode) =
+      case node.kind:
+      of nkRecList: (for son in node: gen_fields(son))
+      of nkSym: (if node.sym.typ.kind != tyEmpty: fields.add get_type(module, node.sym.typ))
+      else: discard
 
-  gen_fields(typ.n)
-  let fields_ptr = if fields.len == 0: nil else: addr fields[0]
-  llvm.structSetBody(result, fields_ptr, cuint fields.len, 0)
+    gen_fields(typ.n)
+    let fields_ptr = if fields.len == 0: nil else: addr fields[0]
+    llvm.structSetBody(result, fields_ptr, cuint fields.len, 0)
 
 # String Types -----------------------------------------------------------------
 
