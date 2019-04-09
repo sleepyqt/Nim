@@ -1,5 +1,5 @@
 from modulegraphs import PPassContext, ModuleGraph
-from ast import PSym, routineKinds
+import ast
 from options import ConfigRef
 from sighashes import SigHash, hash, `==`, hashProc, hashNonProc, `$`
 from msgs import toFullPath
@@ -288,3 +288,17 @@ proc call_memset*(module: BModule; dst: ValueRef; val: int8; len: int64) =
       llvm.constInt(module.ll_logic_bool, culonglong 0, Bool 0)]
     discard call_intrisic(module, name, module.ll_memset32, args)
   else: assert(false)
+
+# ------------------------------------------------------------------------------
+
+proc get_field_index*(module: BModule; typ: PType; sym: PSym): int =
+  let node = typ.n
+  if node.kind == nkSym:
+    if sym == node.sym:
+      result = 0
+  elif node.kind == nkRecList:
+    for son in node:
+      if son.sym == sym:
+        return
+      else:
+        inc result

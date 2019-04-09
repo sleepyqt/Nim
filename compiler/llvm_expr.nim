@@ -3,10 +3,9 @@ from transf import transformBody
 import llvm_data, llvm_type
 import llvm_dll as llvm
 
-proc gen_L_value*(module: BModule; node: PNode): ValueRef
-proc gen_R_value*(module: BModule; node: PNode): ValueRef
-proc gen_stmt_list*(module: BModule; node: PNode)
+proc gen_expr_lvalue*(module: BModule; node: PNode): ValueRef
 proc gen_stmt*(module: BModule; node: PNode)
+proc gen_expr(module: BModule; node: PNode): ValueRef
 
 # ------------------------------------------------------------------------------
 
@@ -14,6 +13,20 @@ proc maybe_terminate(module: BModule; target: BasicBlockRef) =
   # try to terminate current block
   if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
     discard llvm.buildBr(module.ll_builder, target)
+
+proc insert_entry_alloca(module: BModule; typ: TypeRef; name: cstring): ValueRef =
+  # insert `alloca` instruction at function entry point
+  let incoming_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun         = llvm.getBasicBlockParent(incoming_bb)
+  let entry_bb    = llvm.getEntryBasicBlock(fun)
+  let first       = llvm.getFirstInstruction(entry_bb)
+  if first == nil:
+    llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  else:
+    llvm.positionBuilderBefore(module.ll_builder, first)
+  result = llvm.buildAlloca(module.ll_builder, typ, name)
+  # restore position
+  llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
 
 proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
   case typ.kind:
@@ -32,13 +45,13 @@ proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
   of tyInt64, tyUInt64:
     let val = llvm.constInt(module.ll_int64, culonglong 0, Bool 0)
     discard llvm.buildStore(module.ll_builder, val, alloca)
-  of tyObject:
+  of tyObject, tyArray:
     let adr = llvm.buildBitCast(module.ll_builder, alloca, module.ll_pointer, "")
     let size = getSize(module.module_list.config, typ)
     call_memset(module, adr, 0, int64 size)
   else: discard
 
-# ------------------------------------------------------------------------------
+# - Literals -------------------------------------------------------------------
 
 proc gen_int_lit(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
@@ -53,6 +66,24 @@ proc gen_char_lit(module: BModule; node: PNode): ValueRef =
   result = llvm.constInt(ll_type, culonglong node.intVal, Bool 0)
 
 proc gen_float_lit(module: BModule; node: PNode): ValueRef =
+  discard
+
+proc gen_object_lit(module: BModule; node: PNode): ValueRef =
+  let typ = get_type(module, node.typ)
+  let alloca = insert_entry_alloca(module, typ, "object_literal")
+  let adr = llvm.buildBitCast(module.ll_builder, alloca, module.ll_pointer, "")
+  let size = getSize(module.module_list.config, node.typ)
+  call_memset(module, adr, 0, size)
+  result = alloca
+  for i in 1 ..< node.len:
+    let field = node[i]
+    let index = get_field_index(module, node.typ, field[0].sym)
+    echo "object field: ", i, " -> ", field.kind, " index: ", index, " sym: ", field[0].sym.kind
+
+proc gen_array_lit(module: BModule; node: PNode): ValueRef =
+  discard
+
+proc gen_set_lit(module: BModule; node: PNode): ValueRef =
   discard
 
 # ------------------------------------------------------------------------------
@@ -92,22 +123,11 @@ proc gen_call(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
-proc gen_L_value(module: BModule; node: PNode): ValueRef =
+proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
+  # L value, always pointer
   case node.kind:
   of nkSym: result = gen_sym_L_value(module, node)
-  else: echo "get_L_value: unknown node kind: ", node.kind
-
-proc gen_R_value(module: BModule; node: PNode): ValueRef =
-  case node.kind:
-  of nkSym:
-    result = gen_sym_R_value(module, node)
-  of nkIntLit .. nkInt64Lit:
-    result = gen_int_lit(module, node)
-  of nkUintLit .. nkUInt64Lit :
-    result = gen_uint_lit(module, node)
-  of nkCharLit:
-    result = gen_char_lit(module, node)
-  else: echo "get_R_value: unknown node kind: ", node.kind
+  else: echo "gen_expr_lvalue: unknown node kind: ", node.kind
 
 # Procedure Types --------------------------------------------------------------
 
@@ -160,32 +180,34 @@ proc gen_proc(module: BModule; sym: PSym) =
 
   echo "******* end gen_proc: ", sym.name.s, " *******"
 
-# ------------------------------------------------------------------------------
-
-proc insert_entry_alloca(module: BModule; typ: TypeRef; name: cstring): ValueRef =
-  # insert `alloca` instruction at function entry point
-  let incoming_bb = llvm.getInsertBlock(module.ll_builder)
-  let fun         = llvm.getBasicBlockParent(incoming_bb)
-  let entry_bb    = llvm.getEntryBasicBlock(fun)
-  let first       = llvm.getFirstInstruction(entry_bb)
-  if first == nil:
-    llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-  else:
-    llvm.positionBuilderBefore(module.ll_builder, first)
-  result = llvm.buildAlloca(module.ll_builder, typ, name)
-  # restore position
-  llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
-
 # - Statements -----------------------------------------------------------------
 
 proc gen_asgn(module: BModule; node: PNode) =
-  echo "[] gen_asgn"
   let lhs = node[0]
   let rhs = node[1]
-  assert lhs != nil
-  assert rhs != nil
-  let lhs_val = gen_L_value(module, lhs)
-  let rhs_val = gen_R_value(module, rhs)
+  case lhs.typ.kind:
+  of tyObject:
+    let lhs_val = gen_expr_lvalue(module, lhs)
+    let rhs_val = gen_expr(module, rhs)
+    let dst = llvm.buildBitCast(module.ll_builder, lhs_val, module.ll_pointer, "")
+    let src = llvm.buildBitCast(module.ll_builder, rhs_val, module.ll_pointer, "")
+    let size = getSize(module.module_list.config, lhs.typ)
+    call_memcpy(module, dst, src, size)
+  of tyArray:
+    discard
+  of tyTuple:
+    discard
+  of tyInt .. tyUInt64:
+    let lhs_val = gen_expr_lvalue(module, lhs)
+    let rhs_val = gen_expr(module, rhs)
+    discard llvm.buildStore(module.ll_builder, rhs_val, lhs_val)
+  of tyString:
+    discard
+  of tyRef:
+    discard
+  of tySequence:
+    discard
+  else: assert(false)
 
 proc gen_single_var(module: BModule; node: PNode) =
 
@@ -203,8 +225,8 @@ proc gen_single_var(module: BModule; node: PNode) =
       gen_default_init(module, typ, alloca)
     else:
       # initialize with exrp
-      let val = gen_R_value(module, node[2])
-      assert(val != nil, "local val init")
+      let val = gen_expr(module, node[2])
+      assert(val != nil, "local val init nil")
       discard llvm.buildStore(module.ll_builder, val, alloca)
     echo "adding local: ", sym.id
     module.add_value(sym.id, alloca)
@@ -410,7 +432,7 @@ proc gen_block(module: BModule; node: PNode): ValueRef =
     module.top_scope.break_name = node[0].sym.id
 
   llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-  gen_stmt(module, node[1])
+  result = gen_expr(module, node[1])
 
   maybe_terminate(module, exit_bb)
 
@@ -441,7 +463,8 @@ proc gen_raise(module: BModule; node: PNode) =
   discard
 
 proc gen_discard(module: BModule; node: PNode) =
-  discard
+  if node[0].kind != nkEmpty:
+    discard gen_expr(module, node)
 
 # ------------------------------------------------------------------------------
 
@@ -464,7 +487,17 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
     discard
   else: echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
 
+proc gen_stmt_list(module: BModule; node: PNode) =
+  for son in node.sons:
+    gen_stmt(module, son)
+
+proc gen_stmt_list_expr(module: BModule; node: PNode): ValueRef =
+  for i in 0 .. node.len - 2:
+    gen_stmt(module, node[i])
+  result = gen_expr(module, node.lastSon)
+
 proc gen_expr(module: BModule; node: PNode): ValueRef =
+  # R value, can be pointer or value
   echo "gen expr kind: ", node.kind
   case node.kind:
   of nkSym:
@@ -484,13 +517,13 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkCall, nkHiddenCallConv, nkInfix, nkPrefix, nkPostfix, nkCommand, nkCallStrLit:
     result = gen_call(module, node)
   of nkCurly:
-    discard
+    result = gen_set_lit(module, node)
   of nkBracket:
-    discard
+    result = gen_array_lit(module, node)
   of nkPar, nkTupleConstr:
     discard
   of nkObjConstr:
-    discard
+    result = gen_object_lit(module, node)
   of nkCast:
     discard
   of nkHiddenStdConv, nkHiddenSubConv, nkConv:
@@ -508,7 +541,7 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkBlockExpr, nkBlockStmt:
     result = gen_block(module, node)
   of nkStmtListExpr:
-    discard
+    result = gen_stmt_list_expr(module, node)
   of nkStmtList:
     gen_stmt_list(module, node)
   of nkIfExpr, nkIfStmt:
@@ -589,9 +622,3 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
 
 proc gen_stmt*(module: BModule; node: PNode) =
   let val = gen_expr(module, node)
-
-proc gen_stmt_list*(module: BModule; node: PNode) =
-  echo "[] gen_stmt_list"
-  for son in node.sons:
-    echo "son ", son.kind
-    gen_stmt(module, son)

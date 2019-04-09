@@ -7,7 +7,7 @@ proc get_type*(module: BModule; typ: PType): TypeRef
 
 # Composite Types --------------------------------------------------------------
 
-proc get_array_type*(module: BModule; typ: PType): TypeRef =
+proc get_array_type(module: BModule; typ: PType): TypeRef =
   let sig = hashType(typ)
   result = module.get_type(sig)
   if result == nil:
@@ -16,7 +16,7 @@ proc get_array_type*(module: BModule; typ: PType): TypeRef =
     result = llvm.arrayType(elem_type, elem_count)
     module.add_type(sig, result)
 
-proc get_object_type*(module: BModule; typ: PType): TypeRef =
+proc get_object_type(module: BModule; typ: PType): TypeRef =
   let sig = hashType(typ)
   result = module.get_type(sig)
   if result == nil:
@@ -63,7 +63,7 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
     paramCount = cuint(param.len),
     isVarArg = Bool(0))
 
-# ------------------------------------------------------------------------------
+# Scalar Types -----------------------------------------------------------------
 
 proc get_enum_type(module: BModule; typ: PType): TypeRef =
   discard
@@ -71,11 +71,22 @@ proc get_enum_type(module: BModule; typ: PType): TypeRef =
 proc get_range_type(module: BModule; typ: PType): TypeRef =
   discard
 
+proc get_set_type(module: BModule; typ: PType): TypeRef =
+  case int(getSize(module.module_list.config, typ)):
+  of 1: result = module.ll_int8
+  of 2: result = module.ll_int16
+  of 4: result = module.ll_int32
+  of 8: result = module.ll_int64
+  else: assert(false, "unsupported yet")
+
+# ------------------------------------------------------------------------------
+
 proc get_type*(module: BModule; typ: PType): TypeRef =
   ## maps nim type LLVM type
   assert module != nil
   assert typ != nil
   case typ.kind:
+  of tyBool: result = module.ll_bool
   of tyInt, tyUint: result = module.ll_int
   of tyInt8, tyUInt8: result = module.ll_int8
   of tyInt16, tyUint16: result = module.ll_int16
@@ -88,4 +99,8 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyPointer, tyNil: result = module.ll_void
   of tyProc: result = get_proc_type(module, typ)
   of tyRange: result = get_range_type(module, typ)
+  of tyArray: result = get_array_type(module, typ)
+  of tyEnum: result = get_enum_type(module, typ)
+  of tyCString: result = module.ll_cstring
+  of tySet: result = get_set_type(module, typ)
   else: echo "get_type: unknown type kind: ", typ.kind
