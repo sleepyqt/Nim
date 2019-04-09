@@ -9,6 +9,27 @@ proc gen_expr(module: BModule; node: PNode): ValueRef
 
 # ------------------------------------------------------------------------------
 
+proc gen_copy(module: BModule; lhs, rhs: ValueRef; typ: PType) =
+  case typ.kind:
+  of tyObject:
+    let dst = llvm.buildBitCast(module.ll_builder, lhs, module.ll_pointer, "")
+    let src = llvm.buildBitCast(module.ll_builder, rhs, module.ll_pointer, "")
+    let size = getSize(module.module_list.config, typ)
+    call_memcpy(module, dst, src, size)
+  of tyArray:
+    discard
+  of tyTuple:
+    discard
+  of tyInt .. tyUInt64:
+    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+  of tyString:
+    discard
+  of tyRef:
+    discard
+  of tySequence:
+    discard
+  else: assert(false)
+
 proc maybe_terminate(module: BModule; target: BasicBlockRef) =
   # try to terminate current block
   if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
@@ -78,7 +99,12 @@ proc gen_object_lit(module: BModule; node: PNode): ValueRef =
   for i in 1 ..< node.len:
     let field = node[i]
     let index = get_field_index(module, node.typ, field[0].sym)
-    echo "object field: ", i, " -> ", field.kind, " index: ", index, " sym: ", field[0].sym.kind
+    var indices = [
+      llvm.constInt(module.ll_int32, culonglong 0, Bool 0),
+      llvm.constInt(module.ll_int32, culonglong index, Bool 0)]
+    let lhs = llvm.buildGEP(module.ll_builder, alloca, addr indices[0], cuint len indices, "")
+    let rhs = gen_expr(module, field[1])
+    gen_copy(module, lhs, rhs, field[0].typ)
 
 proc gen_array_lit(module: BModule; node: PNode): ValueRef =
   discard
@@ -183,31 +209,9 @@ proc gen_proc(module: BModule; sym: PSym) =
 # - Statements -----------------------------------------------------------------
 
 proc gen_asgn(module: BModule; node: PNode) =
-  let lhs = node[0]
-  let rhs = node[1]
-  case lhs.typ.kind:
-  of tyObject:
-    let lhs_val = gen_expr_lvalue(module, lhs)
-    let rhs_val = gen_expr(module, rhs)
-    let dst = llvm.buildBitCast(module.ll_builder, lhs_val, module.ll_pointer, "")
-    let src = llvm.buildBitCast(module.ll_builder, rhs_val, module.ll_pointer, "")
-    let size = getSize(module.module_list.config, lhs.typ)
-    call_memcpy(module, dst, src, size)
-  of tyArray:
-    discard
-  of tyTuple:
-    discard
-  of tyInt .. tyUInt64:
-    let lhs_val = gen_expr_lvalue(module, lhs)
-    let rhs_val = gen_expr(module, rhs)
-    discard llvm.buildStore(module.ll_builder, rhs_val, lhs_val)
-  of tyString:
-    discard
-  of tyRef:
-    discard
-  of tySequence:
-    discard
-  else: assert(false)
+  let lhs = gen_expr_lvalue(module, node[0])
+  let rhs = gen_expr(module, node[1])
+  gen_copy(module, lhs, rhs, node[0].typ)
 
 proc gen_single_var(module: BModule; node: PNode) =
 
