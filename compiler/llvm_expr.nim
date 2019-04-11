@@ -27,6 +27,7 @@ proc gen_copy(module: BModule; lhs, rhs: ValueRef; typ: PType) =
   assert lhs != nil
   assert rhs != nil
   assert typ != nil
+  echo "gen_copy typ: ", typ.kind
   case typ.kind:
   of tyObject, tyArray, tyTuple:
     ensure_type_kind(lhs, PointerTypeKind)
@@ -162,23 +163,38 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   # float 64
   else: echo "unknown magic: ", op
 
+# Procedure Types --------------------------------------------------------------
+
 proc gen_call_expr(module: BModule; node: PNode): ValueRef =
+  echo ""
+  echo "*** gen_call_expr ***"
   var args: seq[ValueRef]
-  let callee = gen_expr(module, node[0])
+  let proc_sym   = node[0].sym
+  let ret_type   = getReturnType(proc_sym)
+  let callee_val = gen_expr(module, node[0])
+
+  if ret_type != nil and ret_type.kind in CompositeTypes:
+    result = insert_entry_alloca(module, get_type(module, ret_type), "call.tmp")
+    args.add(result)
+
+  # todo copy composite
 
   for i in 1 .. < node.len:
     var arg_node = node[i]
+    echo "× arg: ", arg_node.kind
+    args.add gen_expr(module, arg_node)
 
   let args_addr = if args.len == 0: nil else: addr args[0]
-  llvm.buildCall(module.ll_builder, callee, args_addr, cuint len args, "")
+  let call_result = llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
+
+  if ret_type != nil and ret_type.kind notin CompositeTypes:
+    result = call_result
 
 proc gen_call(module: BModule; node: PNode): ValueRef =
   if node[0].kind == nkSym and node[0].sym.magic != mNone:
     result = gen_magic_expr(module, node, node[0].sym.magic)
   else:
     result = gen_call_expr(module, node)
-
-# Procedure Types --------------------------------------------------------------
 
 proc gen_proc(module: BModule; sym: PSym): ValueRef =
   assert sym != nil
@@ -199,6 +215,8 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
     let entry_bb   = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "entry")
     let return_bb  = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "return")
     var ret_addr: ValueRef # addres of *result* variable
+
+    module.add_value(sym.id, proc_val)
 
     module.open_scope()
     module.top_scope.proc_val = proc_val
@@ -267,7 +285,6 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
     llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
 
     result = proc_val
-    module.add_value(sym.id, proc_val)
 
     echo "******* verifying proc ***********************"
     # viewFunctionCFG(proc_val)
@@ -302,7 +319,8 @@ proc gen_single_var(module: BModule; node: PNode) =
       let val = gen_expr(module, node[2])
       assert val != nil
       assert alloca != nil
-      discard llvm.buildStore(module.ll_builder, val, alloca)
+      gen_copy(module, alloca, val, node[2].typ)
+      #discard llvm.buildStore(module.ll_builder, val, alloca)
     echo "adding local: ", sym.id
     module.add_value(sym.id, alloca)
 
