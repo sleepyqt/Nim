@@ -10,12 +10,27 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef
 
 # ------------------------------------------------------------------------------
 
+template ensure_type_kind(val: ValueRef; kind: TypeKind) =
+  when true:
+    let typ = llvm.typeOf(val)
+    if llvm.getTypeKind(typ) != kind:
+      let type_name = llvm.printTypeToString(typ)
+      let value_name = llvm.printValueToString(val)
+      echo "#### ensure_type_kind fail:"
+      echo "#### value = ", value_name
+      echo "#### type  = ", type_name
+      disposeMessage(type_name)
+      disposeMessage(value_name)
+      #assert false
+
 proc gen_copy(module: BModule; lhs, rhs: ValueRef; typ: PType) =
   assert lhs != nil
   assert rhs != nil
   assert typ != nil
   case typ.kind:
   of tyObject, tyArray, tyTuple:
+    ensure_type_kind(lhs, PointerTypeKind)
+    ensure_type_kind(rhs, PointerTypeKind)
     let dst = llvm.buildBitCast(module.ll_builder, lhs, module.ll_pointer, "")
     let src = llvm.buildBitCast(module.ll_builder, rhs, module.ll_pointer, "")
     let size = getSize(module.module_list.config, typ)
@@ -148,11 +163,14 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   else: echo "unknown magic: ", op
 
 proc gen_call_expr(module: BModule; node: PNode): ValueRef =
-  let callee = gen_expr(module, node[0])
   var args: seq[ValueRef]
+  let callee = gen_expr(module, node[0])
+
   for i in 1 .. < node.len:
-    discard
-  #llvm.buildCall(module.ll_builder, )
+    var arg_node = node[i]
+
+  let args_addr = if args.len == 0: nil else: addr args[0]
+  llvm.buildCall(module.ll_builder, callee, args_addr, cuint len args, "")
 
 proc gen_call(module: BModule; node: PNode): ValueRef =
   if node[0].kind == nkSym and node[0].sym.magic != mNone:
@@ -541,7 +559,9 @@ proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
   of skVar, skLet, skResult, skParam:
     result = module.get_value(node.sym.id)
   else: echo "gen_sym_L_value: ", node.sym.kind
+
   assert result != nil
+  ensure_type_kind(result, PointerTypeKind)
 
 proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
   case node.sym.kind:
@@ -555,14 +575,15 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
     discard
   of skEnumField:
     discard
-  of skVar, skForVar, skResult, skLet:
+  of skVar, skForVar, skResult, skLet, skParam:
     let alloca = gen_sym_expr_lvalue(module, node)
-    result = llvm.buildLoad(module.ll_builder, alloca, "")
+    case node.sym.typ.kind:
+    of tyObject, tyArray, tyTuple:
+      result = alloca
+    else:
+      result = llvm.buildLoad(module.ll_builder, alloca, "")
   of skTemp:
     discard
-  of skParam:
-    let alloca = gen_sym_expr_lvalue(module, node) # todo: objects?
-    result = llvm.buildLoad(module.ll_builder, alloca, "")
   else: echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
 
 # ------------------------------------------------------------------------------
@@ -593,6 +614,7 @@ proc gen_deref_expr(module: BModule; node: PNode): ValueRef =
 
 proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
   # L value, always pointer
+  echo "gen_expr_lvalue kind: ", node.kind
   case node.kind:
   of nkSym:
     result = gen_sym_expr_lvalue(module, node)
@@ -604,9 +626,11 @@ proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
     result = gen_deref_expr_lvalue(module, node)
   else: echo "gen_expr_lvalue: unknown node kind: ", node.kind
 
+  ensure_type_kind(result, PointerTypeKind)
+
 proc gen_expr(module: BModule; node: PNode): ValueRef =
   # R value, can be pointer or value
-  echo "gen expr kind: ", node.kind
+  echo "gen_expr kind: ", node.kind
   case node.kind:
   of nkSym:
     result = gen_sym_expr(module, node)

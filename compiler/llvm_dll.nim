@@ -98,6 +98,27 @@ type
     #  Other Operators
     CleanupRet = 61, CatchRet = 62, CatchPad = 63, CleanupPad = 64, CatchSwitch = 65
 
+  AttributeIndex* = cuint
+
+  TypeKind* = enum
+    VoidTypeKind,             ## *< type with no size
+    HalfTypeKind,             ## *< 16 bit floating point type
+    FloatTypeKind,            ## *< 32 bit floating point type
+    DoubleTypeKind,           ## *< 64 bit floating point type
+    X86FP80TypeKind,          ## *< 80 bit floating point type (X87)
+    FP128TypeKind,            ## *< 128 bit floating point type (112-bit mantissa)
+    PPC_FP128TypeKind,        ## *< 128 bit floating point type (two 64-bits)
+    LabelTypeKind,            ## *< Labels
+    IntegerTypeKind,          ## *< Arbitrary bit width integers
+    FunctionTypeKind,         ## *< Functions
+    StructTypeKind,           ## *< Structures
+    ArrayTypeKind,            ## *< Arrays
+    PointerTypeKind,          ## *< Pointers
+    VectorTypeKind,           ## *< SIMD 'packed' format, or other vector type
+    MetadataTypeKind,         ## *< Metadata
+    X86MMXTypeKind,           ## *< X86 MMX
+    TokenTypeKind             ## *< Tokens
+
 type
   BinaryProc* = proc (b: BuilderRef; l, r: ValueRef; n: cstring): ValueRef {.dll.}
 
@@ -289,6 +310,9 @@ var getNamedFunction*: proc(m: ModuleRef; name: cstring): ValueRef {.dll.}
 
 var getParam*: proc(fn: ValueRef; index: cuint): ValueRef {.dll.}
 var setValueName2*: proc(val: ValueRef; name: cstring; nameLen: csize) {.dll.}
+
+var addAttributeAtIndex*: proc(f: ValueRef; idx: AttributeIndex; a: AttributeRef) {.dll.}
+var getTypeKind*: proc(ty: TypeRef): TypeKind {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -485,3 +509,6 @@ proc ll_load_dll*: bool =
 
     get_proc(lib, getParam, "LLVMGetParam")
     get_proc(lib, setValueName2, "LLVMSetValueName2")
+
+    get_proc(lib, addAttributeAtIndex, "LLVMAddAttributeAtIndex")
+    get_proc(lib, getTypeKind, "LLVMGetTypeKind")
