@@ -6,21 +6,25 @@ import llvm_dll as llvm
 proc gen_expr_lvalue*(module: BModule; node: PNode): ValueRef
 proc gen_stmt*(module: BModule; node: PNode)
 proc gen_expr(module: BModule; node: PNode): ValueRef
+proc gen_proc(module: BModule; sym: PSym): ValueRef
 
 # ------------------------------------------------------------------------------
 
 proc gen_copy(module: BModule; lhs, rhs: ValueRef; typ: PType) =
+  assert lhs != nil
+  assert rhs != nil
+  assert typ != nil
   case typ.kind:
-  of tyObject:
+  of tyObject, tyArray, tyTuple:
     let dst = llvm.buildBitCast(module.ll_builder, lhs, module.ll_pointer, "")
     let src = llvm.buildBitCast(module.ll_builder, rhs, module.ll_pointer, "")
     let size = getSize(module.module_list.config, typ)
     call_memcpy(module, dst, src, size)
-  of tyArray:
-    discard
-  of tyTuple:
-    discard
-  of tyInt .. tyUInt64:
+  of tyInt .. tyInt64, tyFloat .. tyFloat128, tyUInt .. tyUInt64:
+    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+  of tyPtr, tyPointer, tyCString:
+    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+  of tyBool, tyChar, tyEnum:
     discard llvm.buildStore(module.ll_builder, rhs, lhs)
   of tyString:
     discard
@@ -50,14 +54,16 @@ proc insert_entry_alloca(module: BModule; typ: TypeRef; name: cstring): ValueRef
   llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
 
 proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
+  assert typ != nil
+  assert alloca != nil
   case typ.kind:
   of tyInt, tyUint:
     let val = llvm.constInt(module.ll_int, culonglong 0, Bool 0)
     discard llvm.buildStore(module.ll_builder, val, alloca)
-  of tyInt8, tyUint8:
+  of tyInt8, tyUint8, tyBool:
     let val = llvm.constInt(module.ll_int8, culonglong 0, Bool 0)
     discard llvm.buildStore(module.ll_builder, val, alloca)
-  of tyInt16:
+  of tyInt16, tyUint16:
     let val = llvm.constInt(module.ll_int16, culonglong 0, Bool 0)
     discard llvm.buildStore(module.ll_builder, val, alloca)
   of tyInt32, tyUint32:
@@ -114,32 +120,39 @@ proc gen_set_lit(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
-proc gen_sym_L_value(module: BModule; node: PNode): ValueRef =
-  case node.sym.kind:
-  of skVar, skLet:
-    result = module.get_value(node.sym.id)
-  else: echo "gen_sym_L_value: ", node.sym.kind
-
-proc gen_sym_R_value(module: BModule; node: PNode): ValueRef =
-  case node.sym.kind:
-  of skVar, skLet:
-    let alloca = gen_sym_L_value(module, node)
-    result = llvm.buildLoad(module.ll_builder, alloca, "")
-  else: echo "gen_sym_R_value: ", node.sym.kind
-
-# ------------------------------------------------------------------------------
-
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
+
+  proc binary(prc: BinaryProc): ValueRef =
+    let lhs = gen_expr(module, node[1])
+    let rhs = gen_expr(module, node[2])
+    assert lhs != nil
+    assert rhs != nil
+    result = prc(module.ll_builder, lhs, rhs, "")
+
   case op:
-  of mAddI: discard
-  of mSubI: discard
-  of mMulI: discard
-  of mDivI: discard
-  of mModI: discard
+  # signed int
+  of mAddI: result = binary(llvm.buildAdd)
+  of mSubI: result = binary(llvm.buildSub)
+  of mMulI: result = binary(llvm.buildMul)
+  of mDivI: result = binary(llvm.buildSDiv)
+  of mModI: result = binary(llvm.buildSRem)
+  # unsigned int
+  of mAddU: result = binary(llvm.buildAdd)
+  of mSubU: result = binary(llvm.buildSub)
+  of mMulU: result = binary(llvm.buildMul)
+  of mDivU: result = binary(llvm.buildUDiv)
+  of mModU: result = binary(llvm.buildURem)
+  # logic
+  # float 32
+  # float 64
   else: echo "unknown magic: ", op
 
 proc gen_call_expr(module: BModule; node: PNode): ValueRef =
-  discard
+  let callee = gen_expr(module, node[0])
+  var args: seq[ValueRef]
+  for i in 1 .. < node.len:
+    discard
+  #llvm.buildCall(module.ll_builder, )
 
 proc gen_call(module: BModule; node: PNode): ValueRef =
   if node[0].kind == nkSym and node[0].sym.magic != mNone:
@@ -147,70 +160,109 @@ proc gen_call(module: BModule; node: PNode): ValueRef =
   else:
     result = gen_call_expr(module, node)
 
-# ------------------------------------------------------------------------------
-
-proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
-  # L value, always pointer
-  case node.kind:
-  of nkSym: result = gen_sym_L_value(module, node)
-  else: echo "gen_expr_lvalue: unknown node kind: ", node.kind
-
 # Procedure Types --------------------------------------------------------------
 
-proc gen_proc(module: BModule; sym: PSym) =
-  echo "******* generate proc: ", sym.name.s, " *******"
+proc gen_proc(module: BModule; sym: PSym): ValueRef =
+  assert sym != nil
 
-  # save current bb for nested procs
-  let incoming_bb = llvm.getInsertBlock(module.ll_builder)
+  if (sfBorrow in sym.flags) or (sym.typ == nil):
+    return
+  result = module.get_value(sym.id)
+  if result == nil:
+    echo "******* generate proc: ", sym.name.s, " *******"
 
-  let proc_type = getType(module, sym.typ)
-  let m = printTypeToString(proc_type)
-  echo "[", m, "]"
-  disposeMessage(m)
+    # save current bb for nested procs
+    let incoming_bb = llvm.getInsertBlock(module.ll_builder)
 
-  let proc_name = mangle_name(module, sym)
-  let proc_val = llvm.addFunction(module.ll_module, proc_name, proc_type)
+    let proc_type  = getType(module, sym.typ)
+    let proc_name  = mangle_name(module, sym)
+    let proc_val   = llvm.addFunction(module.ll_module, proc_name, proc_type)
+    let ret_type   = getReturnType(sym)
+    let entry_bb   = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "entry")
+    let return_bb  = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "return")
+    var ret_addr: ValueRef # addres of *result* variable
 
-  module.open_scope()
-  module.top_scope.proc_val = proc_val
+    module.open_scope()
+    module.top_scope.proc_val = proc_val
+    module.top_scope.return_target = return_bb
 
-  let entry_bb = llvm.appendBasicBlockInContext(
-    module.ll_context,
-    module.top_scope.proc_val,
-    "entry")
+    llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
 
-  let return_bb = llvm.appendBasicBlockInContext(
-    module.ll_context,
-    module.top_scope.proc_val,
-    "return")
+    # generate formal parameters and implicit *result* variable
 
-  module.top_scope.return_target = return_bb
+    var param_index = 0
+    if ret_type != nil and ret_type.kind in CompositeTypes:
+      # result is composite type
+      param_index = 1 # skip *result* param
+      ret_addr = llvm.getParam(proc_val, cuint 0)
+      llvm.setValueName2(ret_addr, "result", csize len "result")
+      module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
+    elif ret_type != nil and ret_type.kind notin CompositeTypes:
+      # result is scalar
+      ret_addr = insert_entry_alloca(module, get_type(module, ret_type), "proc.result")
+      module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
+    else:
+      # result is void
+      discard
 
-  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+    for param in sym.typ.n.sons[1 .. ^1]:
+      if isCompileTimeOnly(param.sym.typ): continue
+      let param_value = llvm.getParam(proc_val, cuint param_index)
+      let param_type  = llvm.typeOf(param_value)
+      let param_name  = param.sym.name.s
+      assert param_value != nil
+      assert param_type != nil
+      echo "<><><> generate param: ", param_name
+      llvm.setValueName2(param_value, param_name, csize len param_name)
+      if param.sym.typ.kind in CompositeTypes:
+        # copied by caller
+        module.add_value(param.sym.id, param_value)
+      else:
+        # copy to local
+        let param_addr = insert_entry_alloca(module, param_type, param_name & ".param")
+        discard llvm.buildStore(module.ll_builder, param_value, param_addr)
+        module.add_value(param.sym.id, param_addr)
+      inc param_index
 
-  let new_body = transformBody(module.module_list.graph, sym, cache = false)
-  gen_stmt(module, new_body)
+    # generate body
+    let new_body = transformBody(module.module_list.graph, sym, cache = false)
+    gen_stmt(module, new_body)
 
-  maybe_terminate(module, return_bb)
-  llvm.moveBasicBlockAfter(return_bb, llvm.getInsertBlock(module.ll_builder))
-  llvm.positionBuilderAtEnd(module.ll_builder, return_bb)
+    maybe_terminate(module, return_bb)
+    llvm.moveBasicBlockAfter(return_bb, llvm.getInsertBlock(module.ll_builder))
+    llvm.positionBuilderAtEnd(module.ll_builder, return_bb)
 
-  discard llvm.buildRetVoid(module.ll_builder)
+    # generate ret
+    if ret_type != nil and ret_type.kind in CompositeTypes:
+      # result is composite type
+      discard llvm.buildRetVoid(module.ll_builder)
+    elif ret_type != nil and ret_type.kind notin CompositeTypes:
+      # result is scalar
+      let ret_value = llvm.buildLoad(module.ll_builder, ret_addr, "")
+      discard llvm.buildRet(module.ll_builder, ret_value)
+    else:
+      # result is void
+      discard llvm.buildRetVoid(module.ll_builder)
 
-  module.close_scope()
+    module.close_scope()
 
-  # viewFunctionCFG(proc_val)
-  discard verifyFunction(proc_val, PrintMessageAction)
+    llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
 
-  llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
+    result = proc_val
+    module.add_value(sym.id, proc_val)
 
-  echo "******* end gen_proc: ", sym.name.s, " *******"
+    echo "******* verifying proc ***********************"
+    # viewFunctionCFG(proc_val)
+    discard verifyFunction(proc_val, PrintMessageAction)
+    echo "******* end gen_proc: ", sym.name.s, " *******"
 
 # - Statements -----------------------------------------------------------------
 
 proc gen_asgn(module: BModule; node: PNode) =
   let lhs = gen_expr_lvalue(module, node[0])
   let rhs = gen_expr(module, node[1])
+  assert lhs != nil
+  assert rhs != nil
   gen_copy(module, lhs, rhs, node[0].typ)
 
 proc gen_single_var(module: BModule; node: PNode) =
@@ -230,7 +282,8 @@ proc gen_single_var(module: BModule; node: PNode) =
     else:
       # initialize with exrp
       let val = gen_expr(module, node[2])
-      assert(val != nil, "local val init nil")
+      assert val != nil
+      assert alloca != nil
       discard llvm.buildStore(module.ll_builder, val, alloca)
     echo "adding local: ", sym.id
     module.add_value(sym.id, alloca)
@@ -470,35 +523,86 @@ proc gen_discard(module: BModule; node: PNode) =
   if node[0].kind != nkEmpty:
     discard gen_expr(module, node)
 
+proc gen_stmt_list(module: BModule; node: PNode) =
+  for son in node.sons:
+    gen_stmt(module, son)
+
 # ------------------------------------------------------------------------------
+
+proc gen_stmt_list_expr(module: BModule; node: PNode): ValueRef =
+  for i in 0 .. node.len - 2:
+    gen_stmt(module, node[i])
+  result = gen_expr(module, node.lastSon)
+
+# ------------------------------------------------------------------------------
+
+proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
+  case node.sym.kind:
+  of skVar, skLet, skResult, skParam:
+    result = module.get_value(node.sym.id)
+  else: echo "gen_sym_L_value: ", node.sym.kind
+  assert result != nil
 
 proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
   case node.sym.kind:
   of skMethod:
     discard
   of skProc, skConverter, skIterator, skFunc:
-    #gen_proc(module, node.sym)
-    discard
+    if sfCompileTime in node.sym.flags:
+      assert(false)
+    result = gen_proc(module, node.sym)
   of skConst:
     discard
   of skEnumField:
     discard
   of skVar, skForVar, skResult, skLet:
-    discard
+    let alloca = gen_sym_expr_lvalue(module, node)
+    result = llvm.buildLoad(module.ll_builder, alloca, "")
   of skTemp:
     discard
   of skParam:
-    discard
+    let alloca = gen_sym_expr_lvalue(module, node) # todo: objects?
+    result = llvm.buildLoad(module.ll_builder, alloca, "")
   else: echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
 
-proc gen_stmt_list(module: BModule; node: PNode) =
-  for son in node.sons:
-    gen_stmt(module, son)
+# ------------------------------------------------------------------------------
 
-proc gen_stmt_list_expr(module: BModule; node: PNode): ValueRef =
-  for i in 0 .. node.len - 2:
-    gen_stmt(module, node[i])
-  result = gen_expr(module, node.lastSon)
+proc gen_dot_expr_lvalue(module: BModule; node: PNode): ValueRef =
+  discard
+
+proc gen_dot_expr(module: BModule; node: PNode): ValueRef =
+  discard
+
+# ------------------------------------------------------------------------------
+
+proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
+  discard
+
+proc gen_bracket_expr(module: BModule; node: PNode): ValueRef =
+  discard
+
+# ------------------------------------------------------------------------------
+
+proc gen_deref_expr_lvalue(module: BModule; node: PNode): ValueRef =
+  discard
+
+proc gen_deref_expr(module: BModule; node: PNode): ValueRef =
+  discard
+
+# ------------------------------------------------------------------------------
+
+proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
+  # L value, always pointer
+  case node.kind:
+  of nkSym:
+    result = gen_sym_expr_lvalue(module, node)
+  of nkDotExpr:
+    result = gen_dot_expr_lvalue(module, node)
+  of nkBracketExpr:
+    result = gen_bracket_expr_lvalue(module, node)
+  of nkHiddenDeref, nkDerefExpr:
+    result = gen_deref_expr_lvalue(module, node)
+  else: echo "gen_expr_lvalue: unknown node kind: ", node.kind
 
 proc gen_expr(module: BModule; node: PNode): ValueRef =
   # R value, can be pointer or value
@@ -535,11 +639,11 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkHiddenAddr, nkAddr:
     discard
   of nkBracketExpr:
-    discard
+    result = gen_bracket_expr(module, node)
   of nkDerefExpr, nkHiddenDeref:
-    discard
+    result = gen_deref_expr(module, node)
   of nkDotExpr:
-    discard
+    result = gen_dot_expr(module, node)
   of nkCheckedFieldExpr:
     discard
   of nkBlockExpr, nkBlockStmt:
@@ -609,9 +713,7 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
     discard
   of nkProcDef, nkFuncDef, nkMethodDef, nkConverterDef:
     if node.sons[genericParamsPos].kind == nkEmpty:
-      let sym = node.sons[namePos].sym
-      if (sfBorrow notin sym.flags) and (sym.typ != nil):
-        gen_proc(module, sym)
+      discard gen_proc(module, node.sons[namePos].sym)
   of nkParForStmt:
     discard
   of nkState:

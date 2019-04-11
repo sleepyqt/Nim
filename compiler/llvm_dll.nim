@@ -20,6 +20,7 @@ type
   BuilderRef* = ptr object
   PassManagerRef* = ptr object
   PassRegistryRef* = ptr object
+  AttributeRef* = ptr object
 
 type
   CodeGenOptLevel* {.size: sizeof(cint).} = enum
@@ -96,6 +97,9 @@ type
     Resume = 58, LandingPad = 59, AddrSpaceCast = 60,
     #  Other Operators
     CleanupRet = 61, CatchRet = 62, CatchPad = 63, CleanupPad = 64, CatchSwitch = 65
+
+type
+  BinaryProc* = proc (b: BuilderRef; l, r: ValueRef; n: cstring): ValueRef {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -282,6 +286,10 @@ var buildFPCast*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cst
 
 var buildCall*: proc(a2: BuilderRef; fn: ValueRef; args: ptr ValueRef; numArgs: cuint; name: cstring): ValueRef {.dll.}
 var getNamedFunction*: proc(m: ModuleRef; name: cstring): ValueRef {.dll.}
+
+var getParam*: proc(fn: ValueRef; index: cuint): ValueRef {.dll.}
+var setValueName2*: proc(val: ValueRef; name: cstring; nameLen: csize) {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -404,7 +412,7 @@ proc ll_load_dll*: bool =
     get_proc(lib, getNumClauses, "LLVMGetNumClauses")
     get_proc(lib, getClause, "LLVMGetClause")
     get_proc(lib, addClause, "LLVMAddClause")
-    get_proc(lib, isCleanup, "LLVMIsCleanup ")
+    get_proc(lib, isCleanup, "LLVMIsCleanup")
     get_proc(lib, setCleanup, "LLVMSetCleanup")
     get_proc(lib, addHandler, "LLVMAddHandler")
     get_proc(lib, getNumHandlers, "LLVMGetNumHandlers")
@@ -474,3 +482,6 @@ proc ll_load_dll*: bool =
 
     get_proc(lib, buildCall, "LLVMBuildCall")
     get_proc(lib, getNamedFunction, "LLVMGetNamedFunction")
+
+    get_proc(lib, getParam, "LLVMGetParam")
+    get_proc(lib, setValueName2, "LLVMSetValueName2")

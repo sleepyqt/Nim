@@ -46,27 +46,52 @@ proc get_nim_string_type*(module: BModule; typ: PType): TypeRef =
 
 # Procedure Types --------------------------------------------------------------
 
+const CompositeTypes* = {tyObject, tyArray}
+
 proc get_proc_type*(module: BModule; typ: PType): TypeRef =
+  var params = newSeq[TypeRef]()
   # return type
-  #let return_type = if typ.sons[0] == nil: module.vm_void
-  #                  else: get_type(module, typ.sons[0])
-  let return_type = module.ll_void
+  var return_type: TypeRef = nil
+  if typ[0] == nil:
+    return_type = module.ll_void
+  else:
+    if typ[0].kind in CompositeTypes:
+      # composite types returned in first argument
+      params.add llvm.pointerType(get_type(module, typ[0]), 0)
+      return_type = module.ll_void
+    else:
+      return_type = get_type(module, typ[0])
+
   # param type
-  var param = newSeq[TypeRef]()
   for i in countup(1, sonsLen(typ.n) - 1):
-    var param = typ.n.sons[i].sym
-    if isCompileTimeOnly(param.typ): continue
-    #let param_type = get_type(module, param)
+    let param = typ.n.sons[i].sym
+    if not isCompileTimeOnly(param.typ):
+      let param_type = param.typ
+      let param_ll_type =
+        if param_type.kind in CompositeTypes:
+          # composite types passed as pointers
+          llvm.pointerType(get_type(module, param_type), 0)
+        else:
+          get_type(module, param_type)
+      params.add(param_ll_type)
   result = llvm.functionType(
     returnType = return_type,
-    paramTypes = if param.len == 0: nil else: addr(param[0]),
-    paramCount = cuint(param.len),
+    paramTypes = if params.len == 0: nil else: addr(params[0]),
+    paramCount = cuint(params.len),
     isVarArg = Bool(0))
 
 # Scalar Types -----------------------------------------------------------------
 
 proc get_enum_type(module: BModule; typ: PType): TypeRef =
-  discard
+  if firstOrd(module.module_list.config, typ) < 0:
+    result = module.ll_int32
+  else:
+    case int(getSize(module.module_list.config, typ)):
+    of 1: result = module.ll_int8
+    of 2: result = module.ll_int16
+    of 4: result = module.ll_int32
+    of 8: result = module.ll_int64
+    else: assert false
 
 proc get_range_type(module: BModule; typ: PType): TypeRef =
   discard
@@ -78,6 +103,12 @@ proc get_set_type(module: BModule; typ: PType): TypeRef =
   of 4: result = module.ll_int32
   of 8: result = module.ll_int64
   else: assert(false, "unsupported yet")
+
+# ------------------------------------------------------------------------------
+
+proc get_ptr_type(module: BModule; typ: PType): TypeRef =
+  let elem_type = get_type(module, elemType(typ))
+  result = llvm.pointerType(elem_type, 0)
 
 # ------------------------------------------------------------------------------
 
@@ -96,11 +127,13 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyFloat32: result = module.ll_float32
   of tyObject: result = get_object_type(module, typ)
   of tyTuple: result = get_object_type(module, typ)
-  of tyPointer, tyNil: result = module.ll_void
+  of tyPointer, tyNil: result = module.ll_pointer
   of tyProc: result = get_proc_type(module, typ)
   of tyRange: result = get_range_type(module, typ)
   of tyArray: result = get_array_type(module, typ)
   of tyEnum: result = get_enum_type(module, typ)
   of tyCString: result = module.ll_cstring
   of tySet: result = get_set_type(module, typ)
+  of tyPtr: result = get_ptr_type(module, typ)
+  of tyChar: result = module.ll_char
   else: echo "get_type: unknown type kind: ", typ.kind
