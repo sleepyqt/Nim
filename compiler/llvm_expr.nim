@@ -288,6 +288,7 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
       let param_value = llvm.getParam(proc_val, cuint param_index)
       let param_type  = llvm.typeOf(param_value)
       let param_name  = param.sym.name.s
+      let first_arg_offset = if (ret_type != nil) and (ret_type.kind in CompositeTypes): 2 else: 1
       assert param_value != nil
       assert param_type != nil
       echo "<><><> generate param: ", param_name, " ", index
@@ -295,14 +296,14 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
       if param.sym.typ.kind in CompositeTypes:
         # copied by caller
         module.add_value(param.sym.id, param_value)
-        llvm.addAttributeAtIndex(proc_val, AttributeIndex index + 2, module.ll_byval)
+        llvm.addAttributeAtIndex(proc_val, AttributeIndex index + first_arg_offset, module.ll_byval)
       elif param.sym.typ.kind == tyBool:
         # zero-extend bool params
         let param_addr = insert_entry_alloca(module, module.ll_bool, param_name & ".param")
         let param_i8 = llvm.buildZExt(module.ll_builder, param_value, module.ll_bool, "")
         discard llvm.buildStore(module.ll_builder, param_i8, param_addr)
         module.add_value(param.sym.id, param_addr)
-        llvm.addAttributeAtIndex(proc_val, AttributeIndex index + 1, module.ll_zeroext)
+        llvm.addAttributeAtIndex(proc_val, AttributeIndex index + first_arg_offset, module.ll_zeroext)
       else:
         # copy to local
         let param_addr = insert_entry_alloca(module, param_type, param_name & ".param")
