@@ -94,6 +94,19 @@ proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
     call_memset(module, adr, 0, int64 size)
   else: discard
 
+proc i8_to_i1(module: BModule; value: ValueRef): ValueRef =
+  if llvm.getValueKind(value) == InstructionValueKind:
+    # eleminate common zext trunc combo
+    if llvm.getInstructionOpcode(value) == llvm.ZExt:
+      result = llvm.getOperand(value, 0)
+      if llvm.getFirstUse(value) == nil:
+        llvm.instructionEraseFromParent(value)
+      return
+  result = llvm.buildTrunc(module.ll_builder, value, module.ll_logic_bool, "")
+
+proc i1_to_i8(module: BModule; value: ValueRef): ValueRef =
+  result = llvm.buildZExt(module.ll_builder, value, module.ll_logic_bool, "")
+
 # - Literals -------------------------------------------------------------------
 
 proc gen_int_lit(module: BModule; node: PNode): ValueRef =
@@ -145,6 +158,12 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
     assert rhs != nil
     result = prc(module.ll_builder, lhs, rhs, "")
 
+  proc icmp(pred: IntPredicate): ValueRef =
+    let lhs = gen_expr(module, node[1])
+    let rhs = gen_expr(module, node[2])
+    result = llvm.buildICmp(module.ll_builder, pred, lhs, rhs, "")
+    result = i1_to_i8(module, result)
+
   case op:
   # signed int
   of mAddI: result = binary(llvm.buildAdd)
@@ -158,7 +177,20 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mMulU: result = binary(llvm.buildMul)
   of mDivU: result = binary(llvm.buildUDiv)
   of mModU: result = binary(llvm.buildURem)
-  # logic
+  # integer cmp
+  of mEqI: result = icmp(llvm.IntEQ) # todo: unsigned
+  of mLeI: result = icmp(llvm.IntSLE)
+  of mLtI: result = icmp(llvm.IntSLT)
+  # boolean
+  of mOr: discard
+  of mAnd: discard
+  # bitwise
+  of mShrI: discard
+  of mShlI: discard
+  of mAshrI: discard
+  of mBitandI: discard
+  of  mBitorI: discard
+  of  mBitxorI: discard
   # float 32
   # float 64
   else: echo "unknown magic: ", op
@@ -179,10 +211,17 @@ proc gen_call_expr(module: BModule; node: PNode): ValueRef =
 
   # todo copy composite
 
-  for i in 1 .. < node.len:
-    var arg_node = node[i]
-    echo "× arg: ", arg_node.kind
-    args.add gen_expr(module, arg_node)
+  for i in 1 ..< node.len:
+    echo "× arg: ", node[i].kind
+    let arg_node = node[i]
+    let arg_type = node[i].typ
+    let arg_value = gen_expr(module, arg_node)
+    if arg_type.kind in CompositeTypes:
+      args.add arg_value
+    elif arg_type.kind == tyBool:
+      args.add llvm.buildTrunc(module.ll_builder, arg_value, module.ll_logic_bool, "")
+    else:
+      args.add arg_value
 
   let args_addr = if args.len == 0: nil else: addr args[0]
   let call_result = llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
@@ -233,26 +272,37 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
       ret_addr = llvm.getParam(proc_val, cuint 0)
       llvm.setValueName2(ret_addr, "result", csize len "result")
       module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
+      llvm.addAttributeAtIndex(proc_val, AttributeIndex 1, module.ll_sret)
     elif ret_type != nil and ret_type.kind notin CompositeTypes:
       # result is scalar
       ret_addr = insert_entry_alloca(module, get_type(module, ret_type), "proc.result")
       module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
+      if ret_type.kind == tyBool:
+        llvm.addAttributeAtIndex(proc_val, AttributeIndex 0, module.ll_zeroext)
     else:
       # result is void
       discard
 
-    for param in sym.typ.n.sons[1 .. ^1]:
+    for index, param in sym.typ.n.sons[1 .. ^1]:
       if isCompileTimeOnly(param.sym.typ): continue
       let param_value = llvm.getParam(proc_val, cuint param_index)
       let param_type  = llvm.typeOf(param_value)
       let param_name  = param.sym.name.s
       assert param_value != nil
       assert param_type != nil
-      echo "<><><> generate param: ", param_name
+      echo "<><><> generate param: ", param_name, " ", index
       llvm.setValueName2(param_value, param_name, csize len param_name)
       if param.sym.typ.kind in CompositeTypes:
         # copied by caller
         module.add_value(param.sym.id, param_value)
+        llvm.addAttributeAtIndex(proc_val, AttributeIndex index + 2, module.ll_byval)
+      elif param.sym.typ.kind == tyBool:
+        # zero-extend bool params
+        let param_addr = insert_entry_alloca(module, module.ll_bool, param_name & ".param")
+        let param_i8 = llvm.buildZExt(module.ll_builder, param_value, module.ll_bool, "")
+        discard llvm.buildStore(module.ll_builder, param_i8, param_addr)
+        module.add_value(param.sym.id, param_addr)
+        llvm.addAttributeAtIndex(proc_val, AttributeIndex index + 1, module.ll_zeroext)
       else:
         # copy to local
         let param_addr = insert_entry_alloca(module, param_type, param_name & ".param")
@@ -272,6 +322,12 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
     if ret_type != nil and ret_type.kind in CompositeTypes:
       # result is composite type
       discard llvm.buildRetVoid(module.ll_builder)
+    elif ret_type != nil and ret_type.kind == tyBool:
+      # result is bool
+      let ret_value = llvm.buildLoad(module.ll_builder, ret_addr, "")
+      discard llvm.buildRet(
+        module.ll_builder,
+        llvm.buildTrunc(module.ll_builder, ret_value, module.ll_logic_bool, ""))
     elif ret_type != nil and ret_type.kind notin CompositeTypes:
       # result is scalar
       let ret_value = llvm.buildLoad(module.ll_builder, ret_addr, "")
@@ -406,9 +462,8 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
       # *** emit cond ***
 
       llvm.positionBuilderAtEnd(module.ll_builder, cond_bb)
-      let cond_lhs = llvm.constInt(module.ll_bool, 0, 0) # todo: derp
-      let cond_rhs = llvm.constInt(module.ll_bool, 0, 0)
-      let cond = llvm.buildICmp(module.ll_builder, llvm.IntNE, cond_lhs, cond_rhs, "")
+      let cond = i8_to_i1(module, gen_expr(module, it[0]))
+
       if else_bb == nil:
         # else branch missing
         discard llvm.buildCondBr(module.ll_builder, cond, then_bb, post_bb)
@@ -573,10 +628,11 @@ proc gen_stmt_list_expr(module: BModule; node: PNode): ValueRef =
 # ------------------------------------------------------------------------------
 
 proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
+  echo "gen_sym_expr_lvalue kind: ", node.sym.kind
   case node.sym.kind:
   of skVar, skLet, skResult, skParam:
     result = module.get_value(node.sym.id)
-  else: echo "gen_sym_L_value: ", node.sym.kind
+  else: echo "gen_sym_expr_lvalue: ", node.sym.kind
 
   assert result != nil
   ensure_type_kind(result, PointerTypeKind)

@@ -43,6 +43,8 @@ type
     ll_module*: ModuleRef
     ll_builder*: BuilderRef
     ll_machine*: TargetMachineRef
+    # attributes
+    ll_sret*, ll_byval*, ll_zeroext*: AttributeRef
 
   BModuleList* = ref object of RootObj
     modules*: seq[BModule]
@@ -64,7 +66,7 @@ proc setup_codegen(module: var BModule) =
   block:
     module.ll_context = llvm.contextCreate()
     module.ll_builder = llvm.createBuilderInContext(module.ll_context)
-    module.ll_module = llvm.moduleCreateWithName(module.module_sym.name.s)
+    module.ll_module = llvm.moduleCreateWithNameInContext(module.module_sym.name.s, module.ll_context)
 
   block:
     var triple: string
@@ -157,18 +159,27 @@ proc setup_codegen(module: var BModule) =
       paramCount = cuint len args_memset64,
       isVarArg = Bool 0)
 
+  block:
+    template get_attr(name, val): AttributeRef =
+      let kind_id = llvm.getEnumAttributeKindForName(name, csize len name)
+      llvm.createEnumAttribute(module.ll_context, kind_id, val)
+
+    module.ll_sret = get_attr("sret", 0)
+    module.ll_byval = get_attr("byval", 0)
+    module.ll_zeroext = get_attr("zeroext", 0)
+
 proc setup_module(module: BModule) =
   module.init_proc = llvm.addFunction(
     module.ll_module,
     module.module_sym.name.s & "_module_main",
     llvm.functionType(module.ll_void, nil, 0, Bool 0))
 
-  let entry_bb = llvm.appendBasicBlockInContext(
-    module.ll_context,
-    module.init_proc,
-    "module_entry")
-
+  let entry_bb = llvm.appendBasicBlockInContext( module.ll_context, module.init_proc, "module_entry")
+  let exit_bb = llvm.appendBasicBlockInContext( module.ll_context, module.init_proc, "module_exit")
+  llvm.positionBuilderAtEnd(module.ll_builder, exit_bb)
+  discard llvm.buildRetVoid(module.ll_builder)
   llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  discard llvm.buildBr(module.ll_builder, exit_bb)
   module.top_scope = BScope(proc_val: module.init_proc, parent: nil)
 
 proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): BModule =

@@ -59,6 +59,8 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
       # composite types returned in first argument
       params.add llvm.pointerType(get_type(module, typ[0]), 0)
       return_type = module.ll_void
+    elif typ[0].kind == tyBool:
+      return_type = module.ll_logic_bool
     else:
       return_type = get_type(module, typ[0])
 
@@ -71,6 +73,9 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
         if param_type.kind in CompositeTypes:
           # composite types passed as pointers
           llvm.pointerType(get_type(module, param_type), 0)
+        elif param_type.kind == tyBool:
+          # bool types passed as i1
+          module.ll_logic_bool
         else:
           get_type(module, param_type)
       params.add(param_ll_type)

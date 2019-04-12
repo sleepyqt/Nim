@@ -48,6 +48,7 @@ proc llInit*(config: ConfigRef): bool =
       llvm.initializeInstrumentation(pass_reg)
       llvm.initializeCodeGen(pass_reg)
       llvm.initializeTarget(pass_reg)
+      llvm.initializeScalarOpts(pass_reg)
     else: assert(false, "unsupported cpu")
 
 proc llShutdown* =
@@ -61,6 +62,16 @@ proc llWriteModules*(backend: RootRef, config: ConfigRef) =
   when true:
     let mod_list = BModuleList(backend)
     for module in mod_list.modules:
+
+      when false:
+        let pm = llvm.createPassManager()
+        llvm.addPromoteMemoryToRegisterPass(pm)
+        llvm.addInstructionCombiningPass(pm)
+        llvm.addReassociatePass(pm)
+        llvm.addNewGVNPass(pm)
+        llvm.addCFGSimplificationPass(pm)
+        discard llvm.runPassManager(pm, module.ll_module)
+
       let config = module.module_list.config
       let base_file_name = completeGeneratedFilePath(config, withPackageName(config, module.file_name))
       let ll_file = changeFileExt(base_file_name, ".ll")

@@ -21,6 +21,7 @@ type
   PassManagerRef* = ptr object
   PassRegistryRef* = ptr object
   AttributeRef* = ptr object
+  UseRef* = ptr object
 
 type
   CodeGenOptLevel* {.size: sizeof(cint).} = enum
@@ -119,13 +120,23 @@ type
     X86MMXTypeKind,           ## *< X86 MMX
     TokenTypeKind             ## *< Tokens
 
+  ValueKind* = enum
+    ArgumentValueKind, BasicBlockValueKind, MemoryUseValueKind, MemoryDefValueKind,
+    MemoryPhiValueKind, FunctionValueKind, GlobalAliasValueKind,
+    GlobalIFuncValueKind, GlobalVariableValueKind, BlockAddressValueKind,
+    ConstantExprValueKind, ConstantArrayValueKind, ConstantStructValueKind,
+    ConstantVectorValueKind, UndefValueValueKind, ConstantAggregateZeroValueKind,
+    ConstantDataArrayValueKind, ConstantDataVectorValueKind, ConstantIntValueKind,
+    ConstantFPValueKind, ConstantPointerNullValueKind, ConstantTokenNoneValueKind,
+    MetadataAsValueValueKind, InlineAsmValueKind, InstructionValueKind
+
 type
   BinaryProc* = proc (b: BuilderRef; l, r: ValueRef; n: cstring): ValueRef {.dll.}
 
 # ------------------------------------------------------------------------------
 
 var contextCreate*: proc (): ContextRef {.dll.}
-var moduleCreateWithName*: proc (moduleID: cstring): ModuleRef {.dll.}
+var moduleCreateWithNameInContext*: proc(moduleID: cstring; c: ContextRef): ModuleRef {.dll.}
 
 var int1TypeInContext*: proc(c: ContextRef): TypeRef {.dll.}
 var int8TypeInContext*: proc(c: ContextRef): TypeRef {.dll.}
@@ -314,6 +325,29 @@ var setValueName2*: proc(val: ValueRef; name: cstring; nameLen: csize) {.dll.}
 var addAttributeAtIndex*: proc(f: ValueRef; idx: AttributeIndex; a: AttributeRef) {.dll.}
 var getTypeKind*: proc(ty: TypeRef): TypeKind {.dll.}
 
+var getEnumAttributeKindForName*: proc(name: cstring; sLen: csize): cuint {.dll.}
+var createEnumAttribute*: proc(c: ContextRef; kindID: cuint; val: uint64): AttributeRef {.dll.}
+
+var addPromoteMemoryToRegisterPass*: proc(pm: PassManagerRef) {.dll.}
+var addCFGSimplificationPass*: proc(pm: PassManagerRef) {.dll.}
+var addReassociatePass*: proc(pm: PassManagerRef) {.dll.}
+var addInstructionCombiningPass*: proc(pm: PassManagerRef) {.dll.}
+var createPassManager*: proc(): PassManagerRef {.dll.}
+var runPassManager*: proc(pm: PassManagerRef; m: ModuleRef): Bool {.dll.}
+var disposePassManager*: proc(pm: PassManagerRef) {.dll.}
+var addNewGVNPass*: proc(pm: PassManagerRef) {.dll.}
+
+var instructionEraseFromParent*: proc(inst: ValueRef) {.dll.}
+var getInstructionOpcode*: proc(inst: ValueRef): Opcode {.dll.}
+var getValueKind*: proc(val: ValueRef): ValueKind {.dll.}
+var getOperand*: proc(val: ValueRef; index: cuint): ValueRef {.dll.}
+var getOperandUse*: proc(val: ValueRef; index: cuint): UseRef {.dll.}
+
+var getFirstUse*: proc(val: ValueRef): UseRef {.dll.}
+var getNextUse*: proc(u: UseRef): UseRef {.dll.}
+var getUser*: proc(u: UseRef): ValueRef {.dll.}
+var getUsedValue*: proc(u: UseRef): ValueRef {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -325,7 +359,7 @@ proc ll_load_dll*: bool =
   result = lib != nil
   if result:
     get_proc(lib, contextCreate, "LLVMContextCreate")
-    get_proc(lib, moduleCreateWithName, "LLVMModuleCreateWithName")
+    get_proc(lib, moduleCreateWithNameInContext, "LLVMModuleCreateWithNameInContext")
 
     get_proc(lib, int1TypeInContext, "LLVMInt1TypeInContext")
     get_proc(lib, int8TypeInContext, "LLVMInt8TypeInContext")
@@ -512,3 +546,26 @@ proc ll_load_dll*: bool =
 
     get_proc(lib, addAttributeAtIndex, "LLVMAddAttributeAtIndex")
     get_proc(lib, getTypeKind, "LLVMGetTypeKind")
+
+    get_proc(lib, getEnumAttributeKindForName, "LLVMGetEnumAttributeKindForName")
+    get_proc(lib, createEnumAttribute, "LLVMCreateEnumAttribute")
+
+    get_proc(lib, addPromoteMemoryToRegisterPass, "LLVMAddPromoteMemoryToRegisterPass")
+    get_proc(lib, addCFGSimplificationPass, "LLVMAddCFGSimplificationPass")
+    get_proc(lib, addReassociatePass, "LLVMAddReassociatePass")
+    get_proc(lib, addInstructionCombiningPass,"LLVMAddInstructionCombiningPass")
+    get_proc(lib, createPassManager, "LLVMCreatePassManager")
+    get_proc(lib, runPassManager, "LLVMRunPassManager")
+    get_proc(lib, disposePassManager, "LLVMDisposePassManager")
+    get_proc(lib, addNewGVNPass, "LLVMAddNewGVNPass")
+
+    get_proc(lib, instructionEraseFromParent, "LLVMInstructionEraseFromParent")
+    get_proc(lib, getInstructionOpcode, "LLVMGetInstructionOpcode")
+    get_proc(lib, getValueKind, "LLVMGetValueKind")
+    get_proc(lib, getOperand, "LLVMGetOperand")
+    get_proc(lib, getOperandUse, "LLVMGetOperandUse")
+
+    get_proc(lib, getFirstUse, "LLVMGetFirstUse")
+    get_proc(lib, getNextUse, "LLVMGetNextUse")
+    get_proc(lib, getUser, "LLVMGetUser")
+    get_proc(lib, getUsedValue, "LLVMGetUsedValue")
