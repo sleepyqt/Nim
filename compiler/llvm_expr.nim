@@ -680,10 +680,18 @@ proc gen_bracket_expr(module: BModule; node: PNode): ValueRef =
 # ------------------------------------------------------------------------------
 
 proc gen_deref_expr_lvalue(module: BModule; node: PNode): ValueRef =
-  discard
+  # **value -> *value
+  let adr = gen_expr_lvalue(module, node[0])
+  result = llvm.buildLoad(module.ll_builder, adr, "deref.lvalue")
 
 proc gen_deref_expr(module: BModule; node: PNode): ValueRef =
-  discard
+  # *value -> value
+  let adr = gen_expr(module, node[0])
+  result = llvm.buildLoad(module.ll_builder, adr, "deref.rvalue")
+
+proc gen_addr(module: BModule; node: PNode): ValueRef =
+  # addr foo
+  result = gen_expr_lvalue(module, node[0])
 
 # ------------------------------------------------------------------------------
 
@@ -736,7 +744,7 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkHiddenStdConv, nkHiddenSubConv, nkConv:
     discard
   of nkHiddenAddr, nkAddr:
-    discard
+    result = gen_addr(module, node)
   of nkBracketExpr:
     result = gen_bracket_expr(module, node)
   of nkDerefExpr, nkHiddenDeref:

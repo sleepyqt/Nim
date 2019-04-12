@@ -139,6 +139,6 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyEnum: result = get_enum_type(module, typ)
   of tyCString: result = module.ll_cstring
   of tySet: result = get_set_type(module, typ)
-  of tyPtr: result = get_ptr_type(module, typ)
+  of tyPtr, tyRef, tyVar, tyLent: result = get_ptr_type(module, typ)
   of tyChar: result = module.ll_char
   else: echo "get_type: unknown type kind: ", typ.kind
