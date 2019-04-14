@@ -348,6 +348,12 @@ var getNextUse*: proc(u: UseRef): UseRef {.dll.}
 var getUser*: proc(u: UseRef): ValueRef {.dll.}
 var getUsedValue*: proc(u: UseRef): ValueRef {.dll.}
 
+var addIncoming*: proc(phiNode: ValueRef; incomingValues: ptr ValueRef; incomingBlocks: ptr BasicBlockRef; count: cuint) {.dll.}
+var countIncoming*: proc(phiNode: ValueRef): cuint {.dll.}
+var getIncomingValue*: proc(phiNode: ValueRef; index: cuint): ValueRef {.dll.}
+var getIncomingBlock*: proc(phiNode: ValueRef; index: cuint): BasicBlockRef {.dll.}
+var buildPhi*: proc(a2: BuilderRef; ty: TypeRef; name: cstring): ValueRef {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -569,3 +575,9 @@ proc ll_load_dll*: bool =
     get_proc(lib, getNextUse, "LLVMGetNextUse")
     get_proc(lib, getUser, "LLVMGetUser")
     get_proc(lib, getUsedValue, "LLVMGetUsedValue")
+
+    get_proc(lib, addIncoming, "LLVMAddIncoming")
+    get_proc(lib, countIncoming, "LLVMCountIncoming")
+    get_proc(lib, getIncomingValue, "LLVMGetIncomingValue")
+    get_proc(lib, getIncomingBlock, "LLVMGetIncomingBlock")
+    get_proc(lib, buildPhi, "LLVMBuildPhi")

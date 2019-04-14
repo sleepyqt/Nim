@@ -10,8 +10,25 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef
 
 # ------------------------------------------------------------------------------
 
+proc `$`(x: ValueRef): string =
+  if x == nil:
+    result = "nil ValueRef"
+  else:
+    let str = llvm.printValueToString(x)
+    result = $str
+    disposeMessage(str)
+
+proc `$`(x: TypeRef): string =
+  if x == nil:
+    result = "nil TypeRef"
+  else:
+    let str = llvm.printTypeToString(x)
+    result = $str
+    disposeMessage(str)
+
 template ensure_type_kind(val: ValueRef; kind: TypeKind) =
   when true:
+    assert val != nil
     let typ = llvm.typeOf(val)
     if llvm.getTypeKind(typ) != kind:
       let type_name = llvm.printTypeToString(typ)
@@ -105,7 +122,7 @@ proc i8_to_i1(module: BModule; value: ValueRef): ValueRef =
   result = llvm.buildTrunc(module.ll_builder, value, module.ll_logic_bool, "")
 
 proc i1_to_i8(module: BModule; value: ValueRef): ValueRef =
-  result = llvm.buildZExt(module.ll_builder, value, module.ll_logic_bool, "")
+  result = llvm.buildZExt(module.ll_builder, value, module.ll_bool, "")
 
 # - Literals -------------------------------------------------------------------
 
@@ -149,6 +166,45 @@ proc gen_set_lit(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
+proc gen_logic_and(module: BModule; node: PNode): ValueRef =
+  discard
+
+proc gen_logic_or(module: BModule; node: PNode): ValueRef =
+  let incoming_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(incoming_bb)
+  let end_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "or.end")
+  var rhs_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "or.rhs")
+  llvm.moveBasicBlockAfter(rhs_bb, incoming_bb)
+  llvm.moveBasicBlockAfter(end_bb, rhs_bb)
+
+  # evaluate lhs first
+  llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
+  let lhs = i8_to_i1(module, gen_expr(module, node[1]))
+  # reacquire basic block, as new nodes may have inserted
+  let lhs_bb = llvm.getInsertBlock(module.ll_builder)
+  # short-circuit if lhs is true
+  discard llvm.buildCondBr(module.ll_builder, lhs, end_bb, rhs_bb)
+
+  # evaluate rhs
+  llvm.positionBuilderAtEnd(module.ll_builder, rhs_bb)
+  let rhs = i8_to_i1(module, gen_expr(module, node[2]))
+  # reacquire rhs basic block
+  rhs_bb = llvm.getInsertBlock(module.ll_builder)
+  discard llvm.buildBr(module.ll_builder, end_bb)
+
+  # phi node
+  llvm.positionBuilderAtEnd(module.ll_builder, end_bb)
+  let phi = llvm.buildPHI(module.ll_builder, module.ll_logic_bool, "")
+  var values = [llvm.constInt(module.ll_logic_bool, culonglong 1, Bool 0), rhs]
+  var blocks = [lhs_bb, rhs_bb]
+  llvm.addIncoming(phi, addr values[0], addr blocks[0], 2)
+  result = i1_to_i8(module, phi)
+
+proc gen_magic_echo(module: BModule; node: PNode) =
+  #for i in 1 ..< node.len:
+  #  let arg_node = node[i]
+  discard
+
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
   proc binary(prc: BinaryProc): ValueRef =
@@ -182,17 +238,19 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mLeI: result = icmp(llvm.IntSLE)
   of mLtI: result = icmp(llvm.IntSLT)
   # boolean
-  of mOr: discard
-  of mAnd: discard
+  of mOr: result = gen_logic_or(module, node)
+  of mAnd: result = gen_logic_and(module, node)
   # bitwise
   of mShrI: discard
   of mShlI: discard
   of mAshrI: discard
-  of mBitandI: discard
-  of  mBitorI: discard
-  of  mBitxorI: discard
+  of mBitandI: result = binary(llvm.buildAnd)
+  of mBitorI: result = binary(llvm.buildOr)
+  of mBitxorI: result = binary(llvm.buildXor)
   # float 32
   # float 64
+  # misc
+  of mEcho: gen_magic_echo(module, node)
   else: echo "unknown magic: ", op
 
 # Procedure Types --------------------------------------------------------------
@@ -235,14 +293,22 @@ proc gen_call(module: BModule; node: PNode): ValueRef =
   else:
     result = gen_call_expr(module, node)
 
+proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
+  let proc_type = getType(module, sym.typ)
+  let proc_name = sym.name.s
+  let proc_val = llvm.addFunction(module.ll_module, proc_name, proc_type)
+  module.add_value(sym.id, proc_val)
+
 proc gen_proc(module: BModule; sym: PSym): ValueRef =
   assert sym != nil
-
   if (sfBorrow in sym.flags) or (sym.typ == nil):
     return
   result = module.get_value(sym.id)
   if result == nil:
     echo "******* generate proc: ", sym.name.s, " *******"
+
+    if sfImportc in sym.flags:
+      return gen_importc_proc(module, sym)
 
     # save current bb for nested procs
     let incoming_bb = llvm.getInsertBlock(module.ll_builder)
@@ -344,7 +410,7 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
     result = proc_val
 
     echo "******* verifying proc ***********************"
-    # viewFunctionCFG(proc_val)
+    #viewFunctionCFG(proc_val)
     discard verifyFunction(proc_val, PrintMessageAction)
     echo "******* end gen_proc: ", sym.name.s, " *******"
 
@@ -531,7 +597,7 @@ proc gen_while(module: BModule; node: PNode) =
 
   llvm.positionBuilderAtEnd(module.ll_builder, cond_bb)
   # emit condition
-  let cond = llvm.constInt(module.ll_bool, 0, 0)
+  let cond = i8_to_i1(module, gen_expr(module, node[0]))
   discard llvm.buildCondBr(module.ll_builder, cond, loop_bb, exit_bb)
 
   llvm.positionBuilderAtEnd(module.ll_builder, loop_bb)
@@ -613,7 +679,7 @@ proc gen_raise(module: BModule; node: PNode) =
 
 proc gen_discard(module: BModule; node: PNode) =
   if node[0].kind != nkEmpty:
-    discard gen_expr(module, node)
+    discard gen_expr(module, node[0])
 
 proc gen_stmt_list(module: BModule; node: PNode) =
   for son in node.sons:
@@ -631,7 +697,7 @@ proc gen_stmt_list_expr(module: BModule; node: PNode): ValueRef =
 proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
   echo "gen_sym_expr_lvalue kind: ", node.sym.kind
   case node.sym.kind:
-  of skVar, skLet, skResult, skParam:
+  of skVar, skForVar, skLet, skResult, skParam:
     result = module.get_value(node.sym.id)
   else: echo "gen_sym_expr_lvalue: ", node.sym.kind
 
@@ -664,18 +730,44 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
 # ------------------------------------------------------------------------------
 
 proc gen_dot_expr_lvalue(module: BModule; node: PNode): ValueRef =
-  discard
+  echo "gen_dot_expr_lvalue:"
+  echo "node.kind    = ", node.kind
+  echo "node[0].kind = ", node[0].kind
+  echo "node[1].kind = ", node[1].kind
+  echo "node[0].typ.kind = ", node[0].typ.kind
+  echo "node[1].typ.kind = ", node[1].typ.kind
+  #assert node[0].kind == nkSym
+  #assert node[1].kind == nkSym
+  let lhs = gen_expr_lvalue(module, node[0])
+  let index = get_field_index(module, node[0].typ, node[1].sym)
+  var indices = [
+      llvm.constInt(module.ll_int32, culonglong 0, Bool 0),
+      llvm.constInt(module.ll_int32, culonglong index, Bool 0)]
+  result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "")
+  echo "result = ", result, " ", llvm.typeOf(result)
 
 proc gen_dot_expr(module: BModule; node: PNode): ValueRef =
-  discard
+  let adr = gen_dot_expr_lvalue(module, node)
+  result = llvm.buildLoad(module.ll_builder, adr, "")
 
 # ------------------------------------------------------------------------------
 
 proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
-  discard
+  echo "gen_bracket_expr_lvalue:"
+  echo "node.kind = ", node.kind
+  let lhs = gen_expr_lvalue(module, node[0])
+  let rhs = gen_expr(module, node[1])
+  echo "lhs = ", lhs
+  echo "rhs = ", rhs
+  var indices = [
+      llvm.constInt(module.ll_int32, culonglong 0, Bool 0),
+      rhs]
+  result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "")
+  echo "result = ", result, " ", llvm.typeOf(result)
 
 proc gen_bracket_expr(module: BModule; node: PNode): ValueRef =
-  discard
+  let adr = gen_bracket_expr_lvalue(module, node)
+  result = llvm.buildLoad(module.ll_builder, adr, "")
 
 # ------------------------------------------------------------------------------
 

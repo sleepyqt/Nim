@@ -168,19 +168,27 @@ proc setup_codegen(module: var BModule) =
     module.ll_byval = get_attr("byval", 0)
     module.ll_zeroext = get_attr("zeroext", 0)
 
+# end setup_codegen
+
 proc setup_module(module: BModule) =
   module.init_proc = llvm.addFunction(
     module.ll_module,
     module.module_sym.name.s & "_module_main",
     llvm.functionType(module.ll_void, nil, 0, Bool 0))
 
-  let entry_bb = llvm.appendBasicBlockInContext( module.ll_context, module.init_proc, "module_entry")
-  let exit_bb = llvm.appendBasicBlockInContext( module.ll_context, module.init_proc, "module_exit")
+  # module entry point
+  let entry_bb = llvm.appendBasicBlockInContext(module.ll_context, module.init_proc, "module_entry")
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  module.top_scope = BScope(proc_val: module.init_proc, parent: nil)
+
+proc finish_module*(module: BModule) =
+  let incoming_bb = llvm.getInsertBlock(module.ll_builder)
+  let exit_bb = llvm.appendBasicBlockInContext(module.ll_context, module.init_proc, "module_exit")
+  llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
+  discard llvm.buildBr(module.ll_builder, exit_bb)
+
   llvm.positionBuilderAtEnd(module.ll_builder, exit_bb)
   discard llvm.buildRetVoid(module.ll_builder)
-  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-  discard llvm.buildBr(module.ll_builder, exit_bb)
-  module.top_scope = BScope(proc_val: module.init_proc, parent: nil)
 
 proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): BModule =
   new(result)
@@ -192,6 +200,17 @@ proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): 
   setup_codegen(result)
   setup_module(result)
   module_list.modules.add(result)
+
+proc gen_main_module*(module: BModule) =
+  # emit app entry point procedure
+  let entry_point = llvm.addFunction(
+    module.ll_module,
+    "main",
+    llvm.functionType(module.ll_int32, nil, 0, Bool 0))
+  let entry_bb = llvm.appendBasicBlockInContext(module.ll_context, entry_point, "app_entry")
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  discard llvm.buildCall(module.ll_builder, module.init_proc, nil, 0, "")
+  discard llvm.buildRet(module.ll_builder, llvm.constInt(module.ll_int32, culonglong 0, Bool 0))
 
 # Scope Stack ------------------------------------------------------------------
 
@@ -303,6 +322,12 @@ proc call_memset*(module: BModule; dst: ValueRef; val: int8; len: int64) =
 # ------------------------------------------------------------------------------
 
 proc get_field_index*(module: BModule; typ: PType; sym: PSym): int =
+  assert typ != nil
+  assert sym != nil
+  echo "get_field_index:"
+  echo "type.kind = ", typ.kind
+  echo "sym.kind = ", sym.kind
+  #let typ = skipTypes(typ, skipPtrs)
   let node = typ.n
   if node.kind == nkSym:
     if sym == node.sym:

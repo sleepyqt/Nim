@@ -61,6 +61,14 @@ proc llWriteModules*(backend: RootRef, config: ConfigRef) =
 
   when true:
     let mod_list = BModuleList(backend)
+
+    for module in mod_list.modules:
+      finish_module(module)
+
+    for module in mod_list.modules:
+      if sfMainModule in module.module_sym.flags:
+        gen_main_module(module)
+
     for module in mod_list.modules:
 
       when false:
@@ -82,7 +90,7 @@ proc llWriteModules*(backend: RootRef, config: ConfigRef) =
       echo m
       disposeMessage(m)
 
-      when false:
+      when true:
         var err0: cstring
         var res0 = llvm.printModuleToFile(module.ll_module, cstring ll_file, addr err0)
         llvm.disposeMessage(err0)
