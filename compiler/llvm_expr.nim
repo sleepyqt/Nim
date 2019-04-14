@@ -166,10 +166,7 @@ proc gen_set_lit(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
-proc gen_logic_and(module: BModule; node: PNode): ValueRef =
-  discard
-
-proc gen_logic_or(module: BModule; node: PNode): ValueRef =
+proc gen_logic_or_and(module: BModule; node: PNode; op: TMagic): ValueRef =
   let incoming_bb = llvm.getInsertBlock(module.ll_builder)
   let fun = llvm.getBasicBlockParent(incoming_bb)
   let end_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "or.end")
@@ -182,8 +179,15 @@ proc gen_logic_or(module: BModule; node: PNode): ValueRef =
   let lhs = i8_to_i1(module, gen_expr(module, node[1]))
   # reacquire basic block, as new nodes may have inserted
   let lhs_bb = llvm.getInsertBlock(module.ll_builder)
-  # short-circuit if lhs is true
-  discard llvm.buildCondBr(module.ll_builder, lhs, end_bb, rhs_bb)
+  var expr_result: int
+  if op == mOr:
+    # short-circuit if lhs is true
+    discard llvm.buildCondBr(module.ll_builder, lhs, end_bb, rhs_bb)
+    expr_result = 1
+  elif op == mAnd:
+    # short-circuit if lhs is false
+    discard llvm.buildCondBr(module.ll_builder, lhs, rhs_bb, end_bb)
+    expr_result = 0
 
   # evaluate rhs
   llvm.positionBuilderAtEnd(module.ll_builder, rhs_bb)
@@ -195,7 +199,7 @@ proc gen_logic_or(module: BModule; node: PNode): ValueRef =
   # phi node
   llvm.positionBuilderAtEnd(module.ll_builder, end_bb)
   let phi = llvm.buildPHI(module.ll_builder, module.ll_logic_bool, "")
-  var values = [llvm.constInt(module.ll_logic_bool, culonglong 1, Bool 0), rhs]
+  var values = [llvm.constInt(module.ll_logic_bool, culonglong expr_result, Bool 0), rhs]
   var blocks = [lhs_bb, rhs_bb]
   llvm.addIncoming(phi, addr values[0], addr blocks[0], 2)
   result = i1_to_i8(module, phi)
@@ -238,8 +242,7 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mLeI: result = icmp(llvm.IntSLE)
   of mLtI: result = icmp(llvm.IntSLT)
   # boolean
-  of mOr: result = gen_logic_or(module, node)
-  of mAnd: result = gen_logic_and(module, node)
+  of mOr, mAnd: result = gen_logic_or_and(module, node, op)
   # bitwise
   of mShrI: discard
   of mShlI: discard
