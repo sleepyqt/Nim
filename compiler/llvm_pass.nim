@@ -9,6 +9,13 @@ from pathutils import changeFileExt, `$`
 import llvm_data, llvm_expr
 import llvm_dll as llvm
 
+#[
+
+list of fronted bugs:
+* https://github.com/nim-lang/Nim/issues/4176
+
+]#
+
 proc myOpen(graph: ModuleGraph; module_sym: PSym): PPassContext =
   echo "myOpen ", module_sym.name.s
   if graph.backend == nil:

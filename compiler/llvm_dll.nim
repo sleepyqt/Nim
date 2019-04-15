@@ -132,6 +132,7 @@ type
 
 type
   BinaryProc* = proc (b: BuilderRef; l, r: ValueRef; n: cstring): ValueRef {.dll.}
+  UnaryProc* = proc(b: BuilderRef; v: ValueRef; name: cstring): ValueRef {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -354,6 +355,10 @@ var getIncomingValue*: proc(phiNode: ValueRef; index: cuint): ValueRef {.dll.}
 var getIncomingBlock*: proc(phiNode: ValueRef; index: cuint): BasicBlockRef {.dll.}
 var buildPhi*: proc(a2: BuilderRef; ty: TypeRef; name: cstring): ValueRef {.dll.}
 
+var constStringInContext*: proc(c: ContextRef; str: cstring; length: cuint; dontNullTerminate: Bool): ValueRef {.dll.}
+var constStructInContext*: proc(c: ContextRef; constantVals: ptr ValueRef; count: cuint; packed: Bool): ValueRef {.dll.}
+var constArray*: proc(elementTy: TypeRef; constantVals: ptr ValueRef; length: cuint): ValueRef {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -362,6 +367,10 @@ template get_proc(lib: typed; fun: pointer; name: typed): typed =
 
 proc ll_load_dll*: bool =
   let lib = loadLib(llvm_dll)
+
+  if lib == nil:
+    echo "can't load LLVM dll :("
+
   result = lib != nil
   if result:
     get_proc(lib, contextCreate, "LLVMContextCreate")
@@ -581,3 +590,7 @@ proc ll_load_dll*: bool =
     get_proc(lib, getIncomingValue, "LLVMGetIncomingValue")
     get_proc(lib, getIncomingBlock, "LLVMGetIncomingBlock")
     get_proc(lib, buildPhi, "LLVMBuildPhi")
+
+    get_proc(lib, constStringInContext, "LLVMConstStringInContext")
+    get_proc(lib, constStructInContext, "LLVMConstStructInContext")
+    get_proc(lib, constArray, "LLVMConstArray")

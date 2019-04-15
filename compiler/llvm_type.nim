@@ -99,7 +99,7 @@ proc get_enum_type(module: BModule; typ: PType): TypeRef =
     else: assert false
 
 proc get_range_type(module: BModule; typ: PType): TypeRef =
-  discard
+  result = get_type(module, typ[0])
 
 proc get_set_type(module: BModule; typ: PType): TypeRef =
   case int(getSize(module.module_list.config, typ)):
@@ -142,3 +142,6 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyPtr, tyRef, tyVar, tyLent: result = get_ptr_type(module, typ)
   of tyChar: result = module.ll_char
   else: echo "get_type: unknown type kind: ", typ.kind
+  if result == nil:
+    echo "get_type fail: ", typ.kind
+  echo ">>>>> mapped type: ", typ.kind, " ----> ", llvm.getTypeKind(result)
