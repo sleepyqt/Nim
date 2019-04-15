@@ -115,7 +115,16 @@ proc setup_codegen(module: var BModule) =
     module.ll_float64 = llvm.doubleTypeInContext(module.ll_context)
     module.ll_cstring = llvm.pointerType(module.ll_char, 0)
     module.ll_pointer = llvm.pointerType(module.ll_int8, 0)
-    # module.ll_nim_string = todo
+    # (c: ContextRef; elementTypes: ptr TypeRef; elementCount: cuint; packed: Bool): TypeRef
+    var nim_string_elements = [
+      module.ll_int,
+      module.ll_int,
+      module.ll_cstring]
+    module.ll_nim_string = llvm.structTypeInContext(
+      module.ll_context,
+      addr nim_string_elements[0],
+      cuint len nim_string_elements,
+      Bool false)
 
   block:
     var args_memcpy32 = [
@@ -269,6 +278,9 @@ proc mangle_name*(module: BModule; sym: PSym): string =
   module.module_list.sig_collisions.inc(sig)
 
 proc mangle_local_name*(module: BModule; sym: PSym): string =
+  mangle(sym.name.s)
+
+proc mangle_global_name*(module: BModule; sym: PSym): string =
   mangle(sym.name.s)
 
 # Intrisics --------------------------------------------------------------------

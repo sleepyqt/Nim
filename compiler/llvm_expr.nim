@@ -60,11 +60,11 @@ proc gen_copy(module: BModule; lhs, rhs: ValueRef; typ: PType) =
   of tyBool, tyChar, tyEnum, tyRange:
     discard llvm.buildStore(module.ll_builder, rhs, lhs)
   of tyString:
-    discard
+    assert false
   of tyRef:
-    discard
+    assert false
   of tySequence:
-    discard
+    assert false
   else: assert(false)
 
 proc maybe_terminate(module: BModule; target: BasicBlockRef) =
@@ -124,6 +124,29 @@ proc i8_to_i1(module: BModule; value: ValueRef): ValueRef =
 
 proc i1_to_i8(module: BModule; value: ValueRef): ValueRef =
   result = llvm.buildZExt(module.ll_builder, value, module.ll_bool, "")
+
+proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed: bool): ValueRef =
+  let src_type = llvm.typeOf(value)
+
+  ensure_type_kind(value, IntegerTypeKind)
+
+  let src_width = llvm.getIntTypeWidth(src_type)
+  let dst_width = llvm.getIntTypeWidth(dst_type)
+
+  if src_width > dst_width:
+    # truncate
+    if signed:
+      result = llvm.buildTrunc(module.ll_builder, value, dst_type, "")
+    else:
+      result = llvm.buildTrunc(module.ll_builder, value, dst_type, "")
+  elif src_width < dst_width:
+    # extend
+    if signed:
+      result = llvm.buildSExt(module.ll_builder, value, dst_type, "")
+    else:
+      result = llvm.buildZExt(module.ll_builder, value, dst_type, "")
+  else:
+    result = value
 
 # - Literals -------------------------------------------------------------------
 
@@ -365,6 +388,8 @@ proc gen_call_expr(module: BModule; node: PNode): ValueRef =
   let ret_type   = getReturnType(proc_sym)
   let callee_val = gen_expr(module, node[0])
 
+  assert callee_val != nil
+
   if ret_type != nil and ret_type.kind in CompositeTypes:
     result = insert_entry_alloca(module, get_type(module, ret_type), "call.tmp")
     args.add(result)
@@ -376,6 +401,9 @@ proc gen_call_expr(module: BModule; node: PNode): ValueRef =
     let arg_node = node[i]
     let arg_type = node[i].typ
     let arg_value = gen_expr(module, arg_node)
+
+    assert arg_value != nil
+
     if arg_type.kind in CompositeTypes:
       args.add arg_value
     elif arg_type.kind == tyBool:
@@ -398,8 +426,8 @@ proc gen_call(module: BModule; node: PNode): ValueRef =
 proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
   let proc_type = getType(module, sym.typ)
   let proc_name = sym.name.s
-  let proc_val = llvm.addFunction(module.ll_module, proc_name, proc_type)
-  module.add_value(sym.id, proc_val)
+  result = llvm.addFunction(module.ll_module, proc_name, proc_type)
+  module.add_value(sym.id, result)
 
 proc gen_proc(module: BModule; sym: PSym): ValueRef =
   assert sym != nil
@@ -407,7 +435,10 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
     return
   result = module.get_value(sym.id)
   if result == nil:
-    echo "******* generate proc: ", sym.name.s, " *******"
+    echo "***********************************************************"
+    echo "* generate proc: ", sym.name.s
+    echo "* flags: ", sym.flags
+    echo "***********************************************************"
 
     if sfImportc in sym.flags:
       return gen_importc_proc(module, sym)
@@ -521,14 +552,29 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
 proc gen_asgn(module: BModule; node: PNode) =
   let lhs = gen_expr_lvalue(module, node[0])
   let rhs = gen_expr(module, node[1])
-  assert lhs != nil
-  assert rhs != nil
+  assert lhs != nil, $node[0].kind
+  assert rhs != nil, $node[1].kind
   gen_copy(module, lhs, rhs, node[0].typ)
 
 proc gen_single_var(module: BModule; node: PNode) =
 
   proc gen_global =
-    discard
+    let sym = node[0].sym
+    let typ = node[0].sym.typ
+    let ll_type = get_type(module, typ)
+    let name = mangle_global_name(module, sym)
+    assert ll_type != nil
+    let adr = llvm.addGlobal(module.ll_module, ll_type, name)
+    llvm.setInitializer(adr, llvm.constNull(ll_type))
+    # initialize global variable
+    if node[2].kind == nkEmpty:
+      gen_default_init(module, typ, adr)
+    else:
+      let value = gen_expr(module, node[2])
+      assert value != nil
+      assert adr != nil
+      gen_copy(module, adr, value, node[2].typ)
+    module.add_value(sym.id, adr)
 
   proc gen_local =
     let sym = node[0].sym
@@ -536,19 +582,17 @@ proc gen_single_var(module: BModule; node: PNode) =
     let ll_type = get_type(module, typ)
     let name = mangle_local_name(module, sym)
     assert ll_type != nil
-    let alloca = insert_entry_alloca(module, ll_type, name)
+    let adr = insert_entry_alloca(module, ll_type, name)
     # initialize variable
     if node[2].kind == nkEmpty:
-      gen_default_init(module, typ, alloca)
+      gen_default_init(module, typ, adr)
     else:
       # initialize with exrp
-      let val = gen_expr(module, node[2])
-      assert val != nil
-      assert alloca != nil
-      gen_copy(module, alloca, val, node[2].typ)
-      #discard llvm.buildStore(module.ll_builder, val, alloca)
-    echo "adding local: ", sym.id
-    module.add_value(sym.id, alloca)
+      let value = gen_expr(module, node[2])
+      assert value != nil
+      assert adr != nil
+      gen_copy(module, adr, value, node[2].typ)
+    module.add_value(sym.id, adr)
 
   echo "[] gen_single_var"
   let name = node[0]
@@ -815,6 +859,7 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
     if sfCompileTime in node.sym.flags:
       assert(false)
     result = gen_proc(module, node.sym)
+    assert result != nil
   of skConst:
     discard
   of skEnumField:
@@ -900,6 +945,25 @@ proc gen_conv(module: BModule; node: PNode): ValueRef =
   if ll_src_type == ll_dst_type:
     result = value
 
+proc gen_check_range_float(module: BModule; node: PNode): ValueRef =
+  # todo
+  discard
+
+proc gen_check_range64(module: BModule; node: PNode): ValueRef =
+  # todo
+  let value = gen_expr(module, node[0])
+  let dst_type = get_type(module, node[0].typ)
+  result = convert_scalar(module, value, dst_type, false) # derp
+
+proc gen_check_range(module: BModule; node: PNode): ValueRef =
+  # todo: range check
+  echo "gen_check_range:"
+  echo "[0] = ", node[0].kind
+  echo "[0] = ", node[0].typ.kind
+  let value = gen_expr(module, node[0])
+  let dst_type = get_type(module, node[0].typ)
+  result = convert_scalar(module, value, dst_type, false) # derp
+
 # ------------------------------------------------------------------------------
 
 proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
@@ -975,11 +1039,11 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkObjUpConv:
     discard
   of nkChckRangeF:
-    discard
+    result = gen_check_range_float(module, node)
   of nkChckRange64:
-    discard
+    result = gen_check_range64(module, node)
   of nkChckRange:
-    discard
+    result = gen_check_range(module, node)
   of nkStringToCString:
     discard
   of nkCStringToString:
@@ -1024,8 +1088,11 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkPragmaBlock:
     discard
   of nkProcDef, nkFuncDef, nkMethodDef, nkConverterDef:
-    if node.sons[genericParamsPos].kind == nkEmpty:
-      discard gen_proc(module, node.sons[namePos].sym)
+    #if node.sons[genericParamsPos].kind == nkEmpty:
+    #  let sym = node.sons[namePos].sym
+    #  if sfCompileTime notin sym.flags:
+    #    discard gen_proc(module, sym)
+    discard
   of nkParForStmt:
     discard
   of nkState:

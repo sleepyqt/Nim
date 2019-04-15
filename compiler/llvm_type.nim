@@ -44,6 +44,9 @@ proc get_cstring_type*(module: BModule; typ: PType): TypeRef =
 proc get_nim_string_type*(module: BModule; typ: PType): TypeRef =
   module.ll_nim_string
 
+proc get_seq_type(module: BModule; typ: PType): TypeRef =
+  discard
+
 # Procedure Types --------------------------------------------------------------
 
 const CompositeTypes* = {tyObject, tyArray}
@@ -141,6 +144,8 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tySet: result = get_set_type(module, typ)
   of tyPtr, tyRef, tyVar, tyLent: result = get_ptr_type(module, typ)
   of tyChar: result = module.ll_char
+  of tyString: result = module.ll_nim_string
+  of tySequence: result = get_seq_type(module, typ)
   else: echo "get_type: unknown type kind: ", typ.kind
   if result == nil:
     echo "get_type fail: ", typ.kind

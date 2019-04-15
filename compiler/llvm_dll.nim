@@ -363,6 +363,12 @@ var addGlobal*: proc(m: ModuleRef; ty: TypeRef; name: cstring): ValueRef {.dll.}
 var getNamedGlobal*: proc(m: ModuleRef; name: cstring): ValueRef {.dll.}
 var setInitializer*: proc(globalVar: ValueRef; constantVal: ValueRef) {.dll.}
 
+var constNull*: proc(ty: TypeRef): ValueRef {.dll.}
+var constAllOnes*: proc(ty: TypeRef): ValueRef {.dll.}
+var getUndef*: proc(ty: TypeRef): ValueRef {.dll.}
+
+var getIntTypeWidth*: proc(integerTy: TypeRef): cuint {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -602,3 +608,9 @@ proc ll_load_dll*: bool =
     get_proc(lib, addGlobal, "LLVMAddGlobal")
     get_proc(lib, getNamedGlobal, "LLVMGetNamedGlobal")
     get_proc(lib, setInitializer, "LLVMSetInitializer")
+
+    get_proc(lib, constNull, "LLVMConstNull")
+    get_proc(lib, constAllOnes, "LLVMConstAllOnes")
+    get_proc(lib, getUndef, "LLVMGetUndef")
+
+    get_proc(lib, getIntTypeWidth, "LLVMGetIntTypeWidth")
