@@ -188,6 +188,23 @@ proc gen_array_lit(module: BModule; node: PNode): ValueRef =
 proc gen_set_lit(module: BModule; node: PNode): ValueRef =
   discard
 
+proc gen_str_lit(module: BModule; node: PNode): ValueRef =
+  echo "gen_str_lit:"
+  echo "kind = ", node.typ.kind
+  if node.typ.kind == tyCString:
+    let str = llvm.constStringInContext(module.ll_context, node.strVal, cuint len node.strVal, Bool 0)
+    let typ = llvm.arrayType(module.ll_char, cuint len(node.strVal) + 1)
+    let global = llvm.addGlobal(module.ll_module, typ, "literal.cstring")
+    llvm.setInitializer(global, str)
+    var indices = [
+      llvm.constInt(module.ll_int32, culonglong 0, Bool 0),
+      llvm.constInt(module.ll_int32, culonglong 0, Bool 0)]
+    result = llvm.buildGEP(module.ll_builder, global, addr indices[0], cuint len indices, "")
+  elif node.typ.kind == tyString:
+    discard
+  else:
+    assert false
+
 # ------------------------------------------------------------------------------
 
 proc gen_logic_or_and(module: BModule; node: PNode; op: TMagic): ValueRef =
@@ -840,11 +857,10 @@ proc gen_dot_expr(module: BModule; node: PNode): ValueRef =
 
 proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
   echo "gen_bracket_expr_lvalue:"
-  echo "node.kind = ", node.kind
   let lhs = gen_expr_lvalue(module, node[0])
   let rhs = gen_expr(module, node[1])
-  echo "lhs = ", lhs
-  echo "rhs = ", rhs
+  assert lhs != nil
+  assert rhs != nil
   var indices = [
       llvm.constInt(module.ll_int32, culonglong 0, Bool 0),
       rhs]
@@ -911,7 +927,7 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkNilLit:
     discard
   of nkStrLit .. nkTripleStrLit:
-    discard
+    result = gen_str_lit(module, node)
   of nkIntLit .. nkInt64Lit:
     result = gen_int_lit(module, node)
   of nkUintLit .. nkUInt64Lit:

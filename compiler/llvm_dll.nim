@@ -359,6 +359,10 @@ var constStringInContext*: proc(c: ContextRef; str: cstring; length: cuint; dont
 var constStructInContext*: proc(c: ContextRef; constantVals: ptr ValueRef; count: cuint; packed: Bool): ValueRef {.dll.}
 var constArray*: proc(elementTy: TypeRef; constantVals: ptr ValueRef; length: cuint): ValueRef {.dll.}
 
+var addGlobal*: proc(m: ModuleRef; ty: TypeRef; name: cstring): ValueRef {.dll.}
+var getNamedGlobal*: proc(m: ModuleRef; name: cstring): ValueRef {.dll.}
+var setInitializer*: proc(globalVar: ValueRef; constantVal: ValueRef) {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -594,3 +598,7 @@ proc ll_load_dll*: bool =
     get_proc(lib, constStringInContext, "LLVMConstStringInContext")
     get_proc(lib, constStructInContext, "LLVMConstStructInContext")
     get_proc(lib, constArray, "LLVMConstArray")
+
+    get_proc(lib, addGlobal, "LLVMAddGlobal")
+    get_proc(lib, getNamedGlobal, "LLVMGetNamedGlobal")
+    get_proc(lib, setInitializer, "LLVMSetInitializer")
