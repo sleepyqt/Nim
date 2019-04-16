@@ -299,7 +299,7 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
     assert rhs != nil
     result = prc(module.ll_builder, lhs, rhs, "")
 
-  proc icmp(pred: IntPredicate): ValueRef =
+  proc cmp_int(pred: IntPredicate): ValueRef =
     let lhs = gen_expr(module, node[1])
     let rhs = gen_expr(module, node[2])
     result = llvm.buildICmp(module.ll_builder, pred, lhs, rhs, "")
@@ -312,29 +312,75 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
   proc abs_int(): ValueRef =
     # if x >= 0 x else: -x
+    let pred = if is_signed_type(node[1].typ): llvm.IntSGE else: llvm.IntUGe
     let value = gen_expr(module, node[1])
     let zero = llvm.constInt(llvm.typeOf(value), 0, Bool 1)
     let neg_value = llvm.buildNeg(module.ll_builder, value, "abs.neg_value")
-    let cond = llvm.buildICmp(module.ll_builder, IntSGE, value, zero, "abs.cmp")
+    let cond = llvm.buildICmp(module.ll_builder, pred, value, zero, "abs.cmp")
     result = llvm.buildSelect(module.ll_builder, cond, value, neg_value, "abs.result")
 
-  proc max_int(): ValueRef =
-    discard
-
   proc min_int(): ValueRef =
-    discard
+    # if x <= y: x else: y
+    let pred = if is_signed_type(node[1].typ): llvm.IntSLE else: llvm.IntULE
+    let x = gen_expr(module, node[1])
+    let y = gen_expr(module, node[2])
+    let cond = llvm.buildICmp(module.ll_builder, pred, x, y, "min.cond")
+    result = llvm.buildSelect(module.ll_builder, cond, x, y, "min.result")
+
+  proc max_int(): ValueRef =
+    # if x >= y: x else: y
+    let pred = if is_signed_type(node[1].typ): llvm.IntSGE else: llvm.IntUGE
+    let x = gen_expr(module, node[1])
+    let y = gen_expr(module, node[2])
+    let cond = llvm.buildICmp(module.ll_builder, pred, x, y, "max.cond")
+    result = llvm.buildSelect(module.ll_builder, cond, x, y, "max.result")
+
+  proc float_binary(prc: BinaryProc): ValueRef =
+    let lhs = gen_expr(module, node[1])
+    let rhs = gen_expr(module, node[2])
+    assert lhs != nil
+    assert rhs != nil
+    result = prc(module.ll_builder, lhs, rhs, "")
+
+  proc abs_float(): ValueRef =
+    # if x >= 0 x else: -x
+    let value = gen_expr(module, node[1])
+    let zero = llvm.constReal(llvm.typeOf(value), 0)
+    let neg_value = llvm.buildNeg(module.ll_builder, value, "abs.neg_value")
+    let cond = llvm.buildFCmp(module.ll_builder, RealOGE, value, zero, "abs.cmp")
+    result = llvm.buildSelect(module.ll_builder, cond, value, neg_value, "abs.result")
+
+  proc min_float(): ValueRef =
+    # if x <= y: x else: y
+    let x = gen_expr(module, node[1])
+    let y = gen_expr(module, node[2])
+    let cond = llvm.buildFCmp(module.ll_builder, llvm.RealOLE, x, y, "")
+    result = llvm.buildSelect(module.ll_builder, cond, x, y, "")
+
+  proc max_float(): ValueRef =
+    # if x >= y: x else: y
+    let x = gen_expr(module, node[1])
+    let y = gen_expr(module, node[2])
+    let cond = llvm.buildFCmp(module.ll_builder, llvm.RealOGE, x, y, "")
+    result = llvm.buildSelect(module.ll_builder, cond, x, y, "")
+
+  proc cmp_float(pred: RealPredicate): ValueRef =
+    let lhs = gen_expr(module, node[1])
+    let rhs = gen_expr(module, node[2])
+    result = llvm.buildFCmp(module.ll_builder, pred, lhs, rhs, "")
+    result = i1_to_i8(module, result)
 
   case op:
+  of mMinI: result = min_int()
+  of mMaxI: result = max_int()
+  of mAbsI: result = abs_int()
   # signed int
   of mAddI: result = binary(llvm.buildAdd)
   of mSubI: result = binary(llvm.buildSub)
   of mMulI: result = binary(llvm.buildMul)
   of mDivI: result = binary(llvm.buildSDiv)
   of mModI: result = binary(llvm.buildSRem)
-  of mMinI: result = min_int()
-  of mMaxI: result = max_int()
   of mUnaryMinusI, mUnaryMinusI64: result = unary_minus()
-  of mAbsI: result = abs_int()
   of mUnaryPlusI: result = gen_expr(module, node[1])
   # unsigned int
   of mAddU: result = binary(llvm.buildAdd)
@@ -343,12 +389,14 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mDivU: result = binary(llvm.buildUDiv)
   of mModU: result = binary(llvm.buildURem)
   # integer cmp
-  of mEqI: result = icmp(llvm.IntEQ)
-  of mLeI: result = icmp(llvm.IntSLE)
-  of mLtI: result = icmp(llvm.IntSLT)
+  of mEqI: result = cmp_int(llvm.IntEQ)
+  of mLeI: result = cmp_int(llvm.IntSLE)
+  of mLtI: result = cmp_int(llvm.IntSLT)
   # unsigned cmp
-  of mLeU: result = icmp(llvm.IntULE)
-  of mLtU: result = icmp(llvm.IntULT)
+  of mLeU: result = cmp_int(llvm.IntULE)
+  of mLtU: result = cmp_int(llvm.IntULT)
+  #of mLeU64: discard
+  #of mLtU64: discard
   # boolean
   of mOr, mAnd: result = gen_logic_or_and(module, node, op)
   of mXor: result = binary(llvm.buildXor)
@@ -361,8 +409,19 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mBitorI: result = binary(llvm.buildOr)
   of mBitxorI: result = binary(llvm.buildXor)
   of mBitnotI: result = unary(llvm.buildNot)
-  # float 32
-  # float 64
+  # float
+  of mMinF64: result = min_float()
+  of mMaxF64: result = max_float()
+  of mAbsF64: result = abs_float()
+  # float arith
+  of mAddF64: result = float_binary(llvm.buildFAdd)
+  of mSubF64: result = float_binary(llvm.buildFSub)
+  of mMulF64: result = float_binary(llvm.buildFMul)
+  of mDivF64: result = float_binary(llvm.buildFDiv)
+  # float cmp
+  of mEqF64: result = cmp_float(llvm.RealOEQ)
+  of mLeF64: result = cmp_float(llvm.RealOLE)
+  of mLtF64: result = cmp_float(llvm.RealOLT)
   # conversion
   #[
   of mZe8ToI: discard
@@ -391,7 +450,7 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mEcho: gen_magic_echo(module, node)
   of mInc: gen_magic_inc(module, node)
   of mDec: gen_magic_dec(module, node)
-  of mOrd: discard
+  #of mOrd: discard
   else: echo "unknown magic: ", op
 
 # Procedure Types --------------------------------------------------------------
