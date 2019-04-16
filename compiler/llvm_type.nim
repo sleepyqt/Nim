@@ -5,6 +5,17 @@ from sighashes import hashType
 
 proc get_type*(module: BModule; typ: PType): TypeRef
 
+# ------------------------------------------------------------------------------
+
+proc is_signed_type*(typ: PType): bool =
+  typ.kind in {tyInt .. tyInt64}
+
+proc get_type_size*(module: BModule; typ: PType): BiggestInt =
+  result = getSize(module.module_list.config, typ)
+
+proc get_type_align*(module: BModule; typ: PType): BiggestInt =
+  discard
+
 # Composite Types --------------------------------------------------------------
 
 proc get_array_type(module: BModule; typ: PType): TypeRef =

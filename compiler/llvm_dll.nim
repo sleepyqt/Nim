@@ -369,6 +369,9 @@ var getUndef*: proc(ty: TypeRef): ValueRef {.dll.}
 
 var getIntTypeWidth*: proc(integerTy: TypeRef): cuint {.dll.}
 
+var constReal*: proc(realTy: TypeRef; n: cdouble): ValueRef {.dll.}
+var buildSelect*: proc(a2: BuilderRef; `if`: ValueRef; then: ValueRef; `else`: ValueRef; name: cstring): ValueRef {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -614,3 +617,7 @@ proc ll_load_dll*: bool =
     get_proc(lib, getUndef, "LLVMGetUndef")
 
     get_proc(lib, getIntTypeWidth, "LLVMGetIntTypeWidth")
+
+    get_proc(lib, constReal, "LLVMConstReal")
+
+    get_proc(lib, buildSelect, "LLVMBuildSelect")
