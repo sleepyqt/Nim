@@ -54,6 +54,38 @@ type
 
 # ------------------------------------------------------------------------------
 
+proc `$`*(x: TypeRef): string =
+  if x == nil:
+    result = "nil TypeRef"
+  else:
+    let str = llvm.printTypeToString(x)
+    result = $str
+    disposeMessage(str)
+
+proc `$`*(x: ValueRef): string =
+  if x == nil:
+    result = "nil ValueRef"
+  else:
+    let str = llvm.printValueToString(x)
+    result = $str
+    disposeMessage(str)
+
+# ------------------------------------------------------------------------------
+
+proc constant*(module: BModule; value: int8): ValueRef =
+  result = llvm.constInt(module.ll_int8, culonglong value, Bool 1)
+
+proc constant*(module: BModule; value: int16): ValueRef =
+  result = llvm.constInt(module.ll_int16, culonglong value, Bool 1)
+
+proc constant*(module: BModule; value: int32): ValueRef =
+  result = llvm.constInt(module.ll_int32, culonglong value, Bool 1)
+
+proc constant*(module: BModule; value: int64): ValueRef =
+  result = llvm.constInt(module.ll_int64, culonglong value, Bool 1)
+
+# ------------------------------------------------------------------------------
+
 proc newModuleList*(graph: ModuleGraph): BModuleList =
   new(result)
   result.graph = graph
@@ -336,17 +368,23 @@ proc call_memset*(module: BModule; dst: ValueRef; val: int8; len: int64) =
 proc get_field_index*(module: BModule; typ: PType; sym: PSym): int =
   assert typ != nil
   assert sym != nil
-  echo "get_field_index:"
-  echo "type.kind = ", typ.kind
-  echo "sym.kind = ", sym.kind
+  echo "++ get_field_index:"
+  echo "++ type.kind = ", typ.kind
+  echo "++ sym.kind = ", sym.kind
   #let typ = skipTypes(typ, skipPtrs)
   let node = typ.n
-  if node.kind == nkSym:
+  case node.kind:
+  of nkSym:
     if sym == node.sym:
       result = 0
-  elif node.kind == nkRecList:
+  of nkRecList:
     for son in node:
       if son.sym == sym:
         return
       else:
         inc result
+  of nkRecCase:
+    discard
+  else:
+    discard
+  echo "++ result = ", result

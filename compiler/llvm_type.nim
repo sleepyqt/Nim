@@ -14,9 +14,9 @@ proc get_type_size*(module: BModule; typ: PType): BiggestInt =
   result = getSize(module.module_list.config, typ)
 
 proc get_type_align*(module: BModule; typ: PType): BiggestInt =
-  discard
+  result = getAlign(module.module_list.config, typ)
 
-# Composite Types --------------------------------------------------------------
+# Array Type -------------------------------------------------------------------
 
 proc get_array_type(module: BModule; typ: PType): TypeRef =
   let sig = hashType(typ)
@@ -27,6 +27,56 @@ proc get_array_type(module: BModule; typ: PType): TypeRef =
     result = llvm.arrayType(elem_type, elem_count)
     module.add_type(sig, result)
 
+# Object Type ------------------------------------------------------------------
+
+proc rec_list_size_align(module: BModule; node: PNode): tuple[size, align: BiggestInt] =
+  case node.kind:
+  of nkRecList:
+    for item in node:
+      result.align = max(result.align, get_type_align(module, item.sym.typ))
+    for item in node:
+      result.size = result.size + max(result.align, get_type_size(module, item.sym.typ))
+  of nkSym:
+    result.align = get_type_align(module, node.sym.typ)
+    result.size = get_type_size(module, node.sym.typ)
+  else:
+    assert false
+  # todo: no support for nested case objects yet
+
+proc gen_object_fields(module: BModule; fields: var seq[TypeRef]; node: PNode) =
+  case node.kind:
+  of nkRecList:
+    # list of fields
+    for item in node:
+      gen_object_fields(module, fields, item)
+  of nkSym:
+    # single field
+    if node.sym.typ.kind != tyEmpty:
+      fields.add get_type(module, node.sym.typ)
+  of nkRecCase:
+    # case object
+    let discriminant = node[0]
+    fields.add get_type(module, discriminant.typ)
+    # find biggest branch and replace it with array of the same size and alignment
+    var max_size, max_align: BiggestInt
+    for branch in node.sons[1 .. ^1]:
+      if branch.kind in {nkOfBranch, nkElse}:
+        let (size, align) = rec_list_size_align(module, branch.lastSon)
+        max_size = max(max_size, size)
+        max_align = max(max_align, align)
+    echo "gen_object_fields: case size: ", max_size, " align: ", max_align
+    let elem_count =
+      cuint (max_size div max_align)
+    let elem_type =
+      if max_align == 1: module.ll_int8
+      elif max_align == 2: module.ll_int16
+      elif max_align == 4: module.ll_int32
+      elif max_align == 8: module.ll_int64
+      else: module.ll_void
+    fields.add llvm.arrayType(elem_type, elem_count)
+  else:
+    discard
+
 proc get_object_type(module: BModule; typ: PType): TypeRef =
   let sig = hashType(typ)
   result = module.get_type(sig)
@@ -35,17 +85,27 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
     result = llvm.structCreateNamed(module.ll_context, name)
     module.add_type(sig, result)
 
+    let size = get_type_size(module, typ)
+    let align = get_type_align(module, typ)
+
+    echo "+------------------------------------------------------+"
+    echo " gen_object_type: ", name
+    echo "+------------------------------------------------------+"
+    echo " size: ", size, ", align: ", align
+
     var fields: seq[TypeRef]
-
-    proc gen_fields(node: PNode) =
-      case node.kind:
-      of nkRecList: (for son in node: gen_fields(son))
-      of nkSym: (if node.sym.typ.kind != tyEmpty: fields.add get_type(module, node.sym.typ))
-      else: discard
-
-    gen_fields(typ.n)
+    gen_object_fields(module, fields, typ.n)
     let fields_ptr = if fields.len == 0: nil else: addr fields[0]
     llvm.structSetBody(result, fields_ptr, cuint fields.len, 0)
+
+    echo " result = ", result
+    echo "+------------------------------------------------------+"
+
+proc get_object_case_branch_type*(module: BModule; node: PNode): TypeRef =
+  var fields: seq[TypeRef]
+  gen_object_fields(module, fields, node)
+  result = llvm.structCreateNamed(module.ll_context, "anonymous") # todo: cache?
+  llvm.structSetBody(result, addr fields[0], cuint fields.len, 0)
 
 # String Types -----------------------------------------------------------------
 

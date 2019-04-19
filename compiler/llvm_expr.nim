@@ -3,28 +3,14 @@ from transf import transformBody
 import llvm_data, llvm_type
 import llvm_dll as llvm
 
+import astalgo
+
 proc gen_expr_lvalue*(module: BModule; node: PNode): ValueRef
 proc gen_stmt*(module: BModule; node: PNode)
 proc gen_expr(module: BModule; node: PNode): ValueRef
 proc gen_proc(module: BModule; sym: PSym): ValueRef
 
 # ------------------------------------------------------------------------------
-
-proc `$`(x: ValueRef): string =
-  if x == nil:
-    result = "nil ValueRef"
-  else:
-    let str = llvm.printValueToString(x)
-    result = $str
-    disposeMessage(str)
-
-proc `$`(x: TypeRef): string =
-  if x == nil:
-    result = "nil TypeRef"
-  else:
-    let str = llvm.printTypeToString(x)
-    result = $str
-    disposeMessage(str)
 
 template ensure_type_kind(val: ValueRef; kind: TypeKind) =
   when true:
@@ -954,16 +940,89 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
+# type O1 = object
+#   x: int32
+#   y: int32
+
+# type O2 = object
+#   x: int32
+#   y: int32
+#   case z: int8
+#   of 1:
+#     a, b, c: int8
+#   of 2:
+#     d, e, f: int8
+#   else:
+#     discard
+#   w: int16
+
+type PathNode = object
+  index: int
+  node: PNode
+
+proc find(module: BModule; field: PSym; node: PNode; path: var seq[PathNode]): bool =
+  # find a field index inside object
+  case node.kind:
+  of nkRecList:
+    path.add PathNode(index: 0, node: node)
+    for item in node:
+      if find(module, field, item, path):
+        return true
+      else:
+        inc path[^1].index
+    path.del(path.high)
+  of nkRecCase:
+    if node[0].sym.id == field.id:
+      return true
+    inc path[^1].index
+    for item in node.sons[1 .. ^1]:
+      if item.kind in {nkOfBranch, nkElse}:
+        if find(module, field, item.lastSon, path):
+          return true
+  of nkSym:
+    if node.sym.id == field.id:
+      return true
+  else:
+    discard
+
 proc gen_dot_expr_lvalue(module: BModule; node: PNode): ValueRef =
+  # node[0].node[1]
+
+  #debug node[1]
+
+  debug node[0]
+
+  var path: seq[PathNode]
+  discard find(module, node[1].sym, node[0].typ.n, path)
+
+  assert path.len > 0
+
   let lhs = gen_expr_lvalue(module, node[0])
-  let index = get_field_index(module, node[0].typ, node[1].sym)
   var indices = [
-      llvm.constInt(module.ll_int32, culonglong 0, Bool 0),
-      llvm.constInt(module.ll_int32, culonglong index, Bool 0)]
+      constant(module, 0i32),
+      constant(module, path[0].index.int32)]
   result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "")
+
+  # case objects require multiple GEPs
+  for i in 1 .. path.high:
+    let brach_type = llvm.pointerType(get_object_case_branch_type(module, path[i].node), 0)
+
+    var indices = [
+      constant(module, 0i32),
+      constant(module, path[i].index.int32)]
+    let adr = llvm.buildBitCast(module.ll_builder, result, brach_type, "")
+    result = llvm.buildGEP(module.ll_builder, adr, addr indices[0], cuint len indices, "")
 
 proc gen_dot_expr(module: BModule; node: PNode): ValueRef =
   let adr = gen_dot_expr_lvalue(module, node)
+  result = llvm.buildLoad(module.ll_builder, adr, "")
+
+proc gen_checked_field_lvalue(module: BModule; node: PNode): ValueRef =
+  # todo: field checks
+  result = gen_dot_expr_lvalue(module, node[0])
+
+proc gen_checked_field_expr(module: BModule; node: PNode): ValueRef =
+  let adr = gen_checked_field_lvalue(module, node)
   result = llvm.buildLoad(module.ll_builder, adr, "")
 
 # ------------------------------------------------------------------------------
@@ -1009,7 +1068,9 @@ proc gen_conv(module: BModule; node: PNode): ValueRef =
   echo "scr_type = ", src_type.kind, " -> ", ll_src_type
   echo "value = ", value
   if ll_src_type == ll_dst_type:
-    result = value
+    return value
+  if dst_type.kind in {tyInt .. tyInt64}:
+    return convert_scalar(module, value, ll_dst_type, true)
 
 proc gen_check_range_float(module: BModule; node: PNode): ValueRef =
   # todo
@@ -1038,6 +1099,8 @@ proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
     result = gen_sym_expr_lvalue(module, node)
   of nkDotExpr:
     result = gen_dot_expr_lvalue(module, node)
+  of nkCheckedFieldExpr:
+    result = gen_checked_field_lvalue(module, node)
   of nkBracketExpr:
     result = gen_bracket_expr_lvalue(module, node)
   of nkHiddenDeref, nkDerefExpr:
@@ -1087,7 +1150,7 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkDotExpr:
     result = gen_dot_expr(module, node)
   of nkCheckedFieldExpr:
-    discard
+    result = gen_checked_field_expr(module, node)
   of nkBlockExpr, nkBlockStmt:
     result = gen_block(module, node)
   of nkStmtListExpr:
