@@ -84,6 +84,12 @@ proc constant*(module: BModule; value: int32): ValueRef =
 proc constant*(module: BModule; value: int64): ValueRef =
   result = llvm.constInt(module.ll_int64, culonglong value, Bool 1)
 
+proc constant_int*(module: BModule; value: int64): ValueRef =
+  case module.module_list.config.target.intSize:
+  of 8: result = constant(module, int64 value)
+  of 4: result = constant(module, int32 value)
+  else: assert false
+
 # ------------------------------------------------------------------------------
 
 proc newModuleList*(graph: ModuleGraph): BModuleList =

@@ -203,9 +203,7 @@ proc gen_str_lit(module: BModule; node: PNode): ValueRef =
     let typ = llvm.arrayType(module.ll_char, cuint len(node.strVal) + 1)
     let global = llvm.addGlobal(module.ll_module, typ, "literal.cstring")
     llvm.setInitializer(global, str)
-    var indices = [
-      llvm.constInt(module.ll_int32, culonglong 0, Bool 0),
-      llvm.constInt(module.ll_int32, culonglong 0, Bool 0)]
+    var indices = [constant(module, 0i32), constant(module, 0i32)]
     result = llvm.buildGEP(module.ll_builder, global, addr indices[0], cuint len indices, "")
   elif node.typ.kind == tyString:
     discard
@@ -988,10 +986,6 @@ proc find(module: BModule; field: PSym; node: PNode; path: var seq[PathNode]): b
 proc gen_dot_expr_lvalue(module: BModule; node: PNode): ValueRef =
   # node[0].node[1]
 
-  #debug node[1]
-
-  debug node[0]
-
   var path: seq[PathNode]
   discard find(module, node[1].sym, node[0].typ.n, path)
 
@@ -1032,10 +1026,28 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
   let rhs = gen_expr(module, node[1])
   assert lhs != nil
   assert rhs != nil
-  var indices = [
-      llvm.constInt(module.ll_int32, culonglong 0, Bool 0),
-      rhs]
-  result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "")
+  echo "lhs ", lhs
+  echo "rhs ", rhs
+  case node[0].typ.kind:
+  of tyArray:
+    var indices = [constant_int(module, 0), rhs]
+    result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "")
+  of tyUncheckedArray:
+    assert false
+  of tyOpenArray:
+    assert false
+  of tyCString:
+    var indices = [rhs]
+    let adr = llvm.buildLoad(module.ll_builder, lhs, "")
+    result = llvm.buildGEP(module.ll_builder, adr, addr indices[0], cuint len indices, "")
+  of tyString:
+    assert false
+  of tySequence:
+    assert false
+  of tyTuple:
+    assert false
+  else:
+    assert false
 
 proc gen_bracket_expr(module: BModule; node: PNode): ValueRef =
   let adr = gen_bracket_expr_lvalue(module, node)
