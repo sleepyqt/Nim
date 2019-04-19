@@ -157,7 +157,7 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
     returnType = return_type,
     paramTypes = if params.len == 0: nil else: addr(params[0]),
     paramCount = cuint(params.len),
-    isVarArg = Bool(0))
+    isVarArg = if tfVarargs in typ.flags: Bool(1) else: Bool(0))
 
 # Scalar Types -----------------------------------------------------------------
 
