@@ -1079,10 +1079,48 @@ proc gen_conv(module: BModule; node: PNode): ValueRef =
   echo "dst_type = ", dst_type.kind, " -> ", ll_dst_type
   echo "scr_type = ", src_type.kind, " -> ", ll_src_type
   echo "value = ", value
+
+  const Integers   = {tyInt .. tyInt64}
+  const Floats     = {tyFloat .. tyFloat128}
+  const Unsigned   = {tyUint .. tyUInt64}
+
   if ll_src_type == ll_dst_type:
-    return value
-  if dst_type.kind in {tyInt .. tyInt64}:
-    return convert_scalar(module, value, ll_dst_type, true)
+    result = value
+
+  elif (src_type.kind in Integers) and (dst_type.kind in Integers):
+    # int -> int
+    result = convert_scalar(module, value, ll_dst_type, true)
+
+  elif (src_type.kind in Unsigned) and (dst_type.kind in Unsigned):
+    # uint -> uint
+    result = convert_scalar(module, value, ll_dst_type, false)
+
+  elif (src_type.kind in {tyFloat32}) and (dst_type.kind in {tyFloat, tyFloat64}):
+    # ext float
+    result = llvm.buildFPExt(module.ll_builder, value, module.ll_float64, "")
+
+  elif (src_type.kind in {tyFloat64, tyFloat}) and (dst_type.kind in {tyFloat32}):
+    # trunc float
+    result = llvm.buildFPTrunc(module.ll_builder, value, module.ll_float32, "")
+
+  elif (src_type.kind in Floats) and (dst_type.kind in Integers):
+    # float -> int
+    result = llvm.buildFPToSI(module.ll_builder, value, ll_dst_type, "")
+
+  elif (src_type.kind in Floats) and (dst_type.kind in Unsigned):
+    # float -> uint
+    result = llvm.buildFPToUI(module.ll_builder, value, ll_dst_type, "")
+
+  elif (src_type.kind in Integers) and (dst_type.kind in Floats):
+    # int -> float
+    result = llvm.buildSIToFP(module.ll_builder, value, ll_dst_type, "")
+
+  elif (src_type.kind in Unsigned) and (dst_type.kind in Floats):
+    # uint -> float
+    result = llvm.buildUIToFP(module.ll_builder, value, ll_dst_type, "")
+
+  else:
+    echo "unsupported ", src_type.kind, " =====> ", dst_type.kind
 
 proc gen_check_range_float(module: BModule; node: PNode): ValueRef =
   # todo
