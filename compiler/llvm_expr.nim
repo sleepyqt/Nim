@@ -1,32 +1,19 @@
 import ast, types
-from transf import transformBody
 import llvm_data, llvm_type
 import llvm_dll as llvm
 
 import astalgo
 
-proc gen_expr_lvalue*(module: BModule; node: PNode): ValueRef
 proc gen_stmt*(module: BModule; node: PNode)
-proc gen_expr(module: BModule; node: PNode): ValueRef
-proc gen_proc(module: BModule; sym: PSym): ValueRef
+proc gen_expr*(module: BModule; node: PNode): ValueRef
+proc gen_expr_lvalue*(module: BModule; node: PNode): ValueRef
+proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType)
+
+import llvm_proc
 
 # ------------------------------------------------------------------------------
 
-template ensure_type_kind(val: ValueRef; kind: TypeKind) =
-  when true:
-    assert val != nil
-    let typ = llvm.typeOf(val)
-    if llvm.getTypeKind(typ) != kind:
-      let type_name = llvm.printTypeToString(typ)
-      let value_name = llvm.printValueToString(val)
-      echo "#### ensure_type_kind fail:"
-      echo "#### value = ", value_name
-      echo "#### type  = ", type_name
-      disposeMessage(type_name)
-      disposeMessage(value_name)
-      #assert false
-
-proc gen_copy(module: BModule; lhs, rhs: ValueRef; typ: PType) =
+proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
   assert lhs != nil
   assert rhs != nil
   assert typ != nil
@@ -52,25 +39,6 @@ proc gen_copy(module: BModule; lhs, rhs: ValueRef; typ: PType) =
   of tySequence:
     assert false
   else: assert(false)
-
-proc maybe_terminate(module: BModule; target: BasicBlockRef) =
-  # try to terminate current block
-  if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
-    discard llvm.buildBr(module.ll_builder, target)
-
-proc insert_entry_alloca(module: BModule; typ: TypeRef; name: cstring): ValueRef =
-  # insert `alloca` instruction at function entry point
-  let incoming_bb = llvm.getInsertBlock(module.ll_builder)
-  let fun         = llvm.getBasicBlockParent(incoming_bb)
-  let entry_bb    = llvm.getEntryBasicBlock(fun)
-  let first       = llvm.getFirstInstruction(entry_bb)
-  if first == nil:
-    llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-  else:
-    llvm.positionBuilderBefore(module.ll_builder, first)
-  result = llvm.buildAlloca(module.ll_builder, typ, name)
-  # restore position
-  llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
 
 proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
   assert typ != nil
@@ -439,177 +407,11 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
 # Procedure Types --------------------------------------------------------------
 
-proc gen_call_expr(module: BModule; node: PNode): ValueRef =
-  echo ""
-  echo "*** gen_call_expr ***"
-  var args: seq[ValueRef]
-  let proc_sym   = node[0].sym
-  let ret_type   = getReturnType(proc_sym)
-  let callee_val = gen_expr(module, node[0])
-
-  assert callee_val != nil
-
-  if ret_type != nil and ret_type.kind in CompositeTypes:
-    result = insert_entry_alloca(module, get_type(module, ret_type), "call.tmp")
-    args.add(result)
-
-  for i in 1 ..< node.len:
-    echo "× arg: ", node[i].kind
-    let arg_node = node[i]
-    let arg_type = node[i].typ
-    let arg_value = gen_expr(module, arg_node)
-
-    assert arg_value != nil
-
-    if arg_type.kind in CompositeTypes:
-      # copy composite type
-      let ll_arg_type = get_type(module, arg_type)
-      let arg_copy = insert_entry_alloca(module, ll_arg_type, "arg_copy")
-      gen_copy(module, arg_copy, arg_value, arg_type)
-      args.add arg_copy
-    elif arg_type.kind == tyBool:
-      args.add llvm.buildTrunc(module.ll_builder, arg_value, module.ll_logic_bool, "")
-    else:
-      args.add arg_value
-
-  let args_addr = if args.len == 0: nil else: addr args[0]
-  let call_result = llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
-
-  if ret_type != nil and ret_type.kind notin CompositeTypes:
-    result = call_result
-
 proc gen_call(module: BModule; node: PNode): ValueRef =
   if node[0].kind == nkSym and node[0].sym.magic != mNone:
     result = gen_magic_expr(module, node, node[0].sym.magic)
   else:
     result = gen_call_expr(module, node)
-
-proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
-  let proc_type = getType(module, sym.typ)
-  let proc_name = sym.name.s
-  result = llvm.addFunction(module.ll_module, proc_name, proc_type)
-  module.add_value(sym.id, result)
-
-proc gen_proc(module: BModule; sym: PSym): ValueRef =
-  assert sym != nil
-  if (sfBorrow in sym.flags) or (sym.typ == nil):
-    return
-  result = module.get_value(sym.id)
-  if result == nil:
-    echo "***********************************************************"
-    echo "* generate proc: ", sym.name.s
-    echo "* flags: ", sym.flags
-    echo "* loc kind: ", sym.loc.k
-    echo "* loc flags: ", sym.loc.flags
-    echo "* call conv: ", sym.typ.callConv
-    echo "***********************************************************"
-
-    if sfImportc in sym.flags:
-      return gen_importc_proc(module, sym)
-
-    # save current bb for nested procs
-    let incoming_bb = llvm.getInsertBlock(module.ll_builder)
-
-    let proc_type  = getType(module, sym.typ)
-    let proc_name  = mangle_name(module, sym)
-    let proc_val   = llvm.addFunction(module.ll_module, proc_name, proc_type)
-    let ret_type   = getReturnType(sym)
-    let entry_bb   = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "entry")
-    let return_bb  = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "return")
-    var ret_addr: ValueRef # addres of *result* variable
-
-    module.add_value(sym.id, proc_val)
-
-    module.open_scope()
-    module.top_scope.proc_val = proc_val
-    module.top_scope.return_target = return_bb
-
-    llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-
-    # generate formal parameters and implicit *result* variable
-
-    var param_index = 0
-    if ret_type != nil and ret_type.kind in CompositeTypes:
-      # result is composite type
-      param_index = 1 # skip *result* param
-      ret_addr = llvm.getParam(proc_val, cuint 0)
-      llvm.setValueName2(ret_addr, "result", csize len "result")
-      module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
-      llvm.addAttributeAtIndex(proc_val, AttributeIndex 1, module.ll_sret)
-    elif ret_type != nil and ret_type.kind notin CompositeTypes:
-      # result is scalar
-      ret_addr = insert_entry_alloca(module, get_type(module, ret_type), "proc.result")
-      module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
-      if ret_type.kind == tyBool:
-        llvm.addAttributeAtIndex(proc_val, AttributeIndex 0, module.ll_zeroext)
-    else:
-      # result is void
-      discard
-
-    for index, param in sym.typ.n.sons[1 .. ^1]:
-      if isCompileTimeOnly(param.sym.typ): continue
-      let param_value = llvm.getParam(proc_val, cuint param_index)
-      let param_type  = llvm.typeOf(param_value)
-      let param_name  = param.sym.name.s
-      let first_arg_offset = if (ret_type != nil) and (ret_type.kind in CompositeTypes): 2 else: 1
-      assert param_value != nil
-      assert param_type != nil
-      echo "<><><> generate param: ", param_name, " ", index
-      llvm.setValueName2(param_value, param_name, csize len param_name)
-      if param.sym.typ.kind in CompositeTypes:
-        # copied by caller
-        module.add_value(param.sym.id, param_value)
-        llvm.addAttributeAtIndex(proc_val, AttributeIndex index + first_arg_offset, module.ll_byval)
-      elif param.sym.typ.kind == tyBool:
-        # zero-extend bool params
-        let param_addr = insert_entry_alloca(module, module.ll_bool, param_name & ".param")
-        let param_i8 = llvm.buildZExt(module.ll_builder, param_value, module.ll_bool, "")
-        discard llvm.buildStore(module.ll_builder, param_i8, param_addr)
-        module.add_value(param.sym.id, param_addr)
-        llvm.addAttributeAtIndex(proc_val, AttributeIndex index + first_arg_offset, module.ll_zeroext)
-      else:
-        # copy to local
-        let param_addr = insert_entry_alloca(module, param_type, param_name & ".param")
-        discard llvm.buildStore(module.ll_builder, param_value, param_addr)
-        module.add_value(param.sym.id, param_addr)
-      inc param_index
-
-    # generate body
-    let new_body = transformBody(module.module_list.graph, sym, cache = false)
-    gen_stmt(module, new_body)
-
-    maybe_terminate(module, return_bb)
-    llvm.moveBasicBlockAfter(return_bb, llvm.getInsertBlock(module.ll_builder))
-    llvm.positionBuilderAtEnd(module.ll_builder, return_bb)
-
-    # generate ret
-    if ret_type != nil and ret_type.kind in CompositeTypes:
-      # result is composite type
-      discard llvm.buildRetVoid(module.ll_builder)
-    elif ret_type != nil and ret_type.kind == tyBool:
-      # result is bool
-      let ret_value = llvm.buildLoad(module.ll_builder, ret_addr, "")
-      discard llvm.buildRet(
-        module.ll_builder,
-        llvm.buildTrunc(module.ll_builder, ret_value, module.ll_logic_bool, ""))
-    elif ret_type != nil and ret_type.kind notin CompositeTypes:
-      # result is scalar
-      let ret_value = llvm.buildLoad(module.ll_builder, ret_addr, "")
-      discard llvm.buildRet(module.ll_builder, ret_value)
-    else:
-      # result is void
-      discard llvm.buildRetVoid(module.ll_builder)
-
-    module.close_scope()
-
-    llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
-
-    result = proc_val
-
-    echo "******* verifying proc ***********************"
-    #viewFunctionCFG(proc_val)
-    discard verifyFunction(proc_val, PrintMessageAction)
-    echo "******* end gen_proc: ", sym.name.s, " *******"
 
 # - Statements -----------------------------------------------------------------
 
@@ -902,11 +704,31 @@ proc gen_stmt_list_expr(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
+proc gen_sym_const(module: BModule; sym: PSym): ValueRef =
+  result = module.get_value(sym.id)
+  if result == nil:
+    case sym.typ.kind:
+    of tyArray:
+      let elem_type = get_type(module, elemType(sym.typ))
+      let elem_count = cuint lengthOrd(module.module_list.config, sym.typ)
+      var items: seq[ValueRef]
+      for item in sym.ast:
+        items.add gen_expr(module, item)
+      let data = llvm.constArray(elem_type, addr items[0], cuint elem_count)
+      result = llvm.addGlobal(module.ll_module, llvm.typeOf(data), "constant")
+      llvm.setGlobalConstant(result, Bool 1)
+      llvm.setInitializer(result, data)
+      module.add_value(sym.id, result)
+    else:
+      assert false
+
 proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
   echo "gen_sym_expr_lvalue kind: ", node.sym.kind
   case node.sym.kind:
   of skVar, skForVar, skLet, skResult, skParam:
     result = module.get_value(node.sym.id)
+  of skConst:
+    result = gen_sym_const(module, node.sym)
   else: echo "gen_sym_expr_lvalue: ", node.sym.kind
 
   assert result != nil
@@ -922,7 +744,7 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
     result = gen_proc(module, node.sym)
     assert result != nil
   of skConst:
-    discard
+    result = gen_sym_const(module, node.sym)
   of skEnumField:
     discard
   of skVar, skForVar, skResult, skLet, skParam:
@@ -1159,7 +981,7 @@ proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
 
   ensure_type_kind(result, PointerTypeKind)
 
-proc gen_expr(module: BModule; node: PNode): ValueRef =
+proc gen_expr*(module: BModule; node: PNode): ValueRef =
   # R value, can be pointer or value
   echo "gen_expr kind: ", node.kind
   case node.kind:
@@ -1265,10 +1087,10 @@ proc gen_expr(module: BModule; node: PNode): ValueRef =
   of nkPragmaBlock:
     discard
   of nkProcDef, nkFuncDef, nkMethodDef, nkConverterDef:
-    #if node.sons[genericParamsPos].kind == nkEmpty:
-    #  let sym = node.sons[namePos].sym
-    #  if sfCompileTime notin sym.flags:
-    #    discard gen_proc(module, sym)
+    if node.sons[genericParamsPos].kind == nkEmpty:
+      let sym = node.sons[namePos].sym
+      if sfCompileTime notin sym.flags:
+        discard gen_proc(module, sym)
     discard
   of nkParForStmt:
     discard

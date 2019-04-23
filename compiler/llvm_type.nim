@@ -1,20 +1,9 @@
 import ast, types
-import llvm_data
+import llvm_data, llvm_abi
 import llvm_dll as llvm
 from sighashes import hashType
 
 proc get_type*(module: BModule; typ: PType): TypeRef
-
-# ------------------------------------------------------------------------------
-
-proc is_signed_type*(typ: PType): bool =
-  typ.kind in {tyInt .. tyInt64}
-
-proc get_type_size*(module: BModule; typ: PType): BiggestInt =
-  result = getSize(module.module_list.config, typ)
-
-proc get_type_align*(module: BModule; typ: PType): BiggestInt =
-  result = getAlign(module.module_list.config, typ)
 
 # Array Type -------------------------------------------------------------------
 
@@ -25,6 +14,28 @@ proc get_array_type(module: BModule; typ: PType): TypeRef =
     let elem_type = get_type(module, elemType(typ))
     let elem_count = cuint lengthOrd(module.module_list.config, typ)
     result = llvm.arrayType(elem_type, elem_count)
+    module.add_type(sig, result)
+
+proc get_openarray_type(module: BModule; typ: PType): TypeRef =
+  let sig = hashType(typ)
+  result = module.get_type(sig)
+  if result == nil:
+    let name = "openArray"
+    result = llvm.structCreateNamed(module.ll_context, name)
+    var fields = [
+      llvm.pointerType(get_type(module, typ.elemType), 0),
+      module.ll_int]
+    llvm.structSetBody(result, addr fields[0], cuint fields.len, 0)
+
+    module.add_type(sig, result)
+
+proc get_seq_type(module: BModule; typ: PType): TypeRef =
+  let sig = hashType(typ)
+  result = module.get_type(sig)
+  if result == nil:
+    let name = typ.sym.name.s
+    result = llvm.structCreateNamed(module.ll_context, name)
+    # todo
     module.add_type(sig, result)
 
 # Object Type ------------------------------------------------------------------
@@ -115,44 +126,60 @@ proc get_cstring_type*(module: BModule; typ: PType): TypeRef =
 proc get_nim_string_type*(module: BModule; typ: PType): TypeRef =
   module.ll_nim_string
 
-proc get_seq_type(module: BModule; typ: PType): TypeRef =
-  discard
-
 # Procedure Types --------------------------------------------------------------
 
-const CompositeTypes* = {tyObject, tyArray}
+proc get_proc_param_type*(module: BModule; typ: PType): TypeRef =
+  if typ.kind == tyBool:
+    result = module.ll_logic_bool
+  else:
+    result = get_type(module, typ)
 
 proc get_proc_type*(module: BModule; typ: PType): TypeRef =
   var params = newSeq[TypeRef]()
+
+  var state = abi_init_func_state(module)
+
   # return type
   var return_type: TypeRef = nil
+
   if typ[0] == nil:
     return_type = module.ll_void
   else:
-    if typ[0].kind in CompositeTypes:
-      # composite types returned in first argument
-      params.add llvm.pointerType(get_type(module, typ[0]), 0)
+    case abi_classify_return(module, typ[0], state):
+    of ParamClass.Direct:
+      return_type = get_proc_param_type(module, typ[0])
+    of ParamClass.Indirect:
       return_type = module.ll_void
-    elif typ[0].kind == tyBool:
-      return_type = module.ll_logic_bool
-    else:
-      return_type = get_type(module, typ[0])
+      params.add llvm.pointerType(get_proc_param_type(module, typ[0]), 0)
+    of ParamClass.Extend:
+      return_type = get_proc_param_type(module, typ[0])
+    of ParamClass.Coerce1:
+      var coerced = abi_coerce1(module, typ[0])
+      return_type = coerced
+    of ParamClass.Coerce2:
+      var coerced = abi_coerce2(module, typ[0])
+      return_type = llvm.structTypeInContext(module.ll_context, addr coerced[0], cuint 2, Bool false)
 
-  # param type
-  for i in countup(1, sonsLen(typ.n) - 1):
-    let param = typ.n.sons[i].sym
-    if not isCompileTimeOnly(param.typ):
-      let param_type = param.typ
-      let param_ll_type =
-        if param_type.kind in CompositeTypes:
-          # composite types passed as pointers
-          llvm.pointerType(get_type(module, param_type), 0)
-        elif param_type.kind == tyBool:
-          # bool types passed as i1
-          module.ll_logic_bool
-        else:
-          get_type(module, param_type)
-      params.add(param_ll_type)
+  # formal parameters types
+  for param in typ.n.sons[1 .. ^1]:
+    if isCompileTimeOnly(param.typ): continue
+    case abi_classify(module, param.typ, state):
+    of ParamClass.Direct:
+      params.add get_proc_param_type(module, param.typ)
+    of ParamClass.Indirect:
+      params.add llvm.pointerType(get_proc_param_type(module, param.typ), 0)
+    of ParamClass.Extend:
+      params.add get_proc_param_type(module, param.typ)
+    of ParamClass.Coerce1:
+      let coerced = abi_coerce1(module, param.typ)
+      params.add coerced
+    of ParamClass.Coerce2:
+      let coerced = abi_coerce2(module, param.typ)
+      params.add coerced[0]
+      params.add coerced[1]
+
+  assert return_type != nil
+
   result = llvm.functionType(
     returnType = return_type,
     paramTypes = if params.len == 0: nil else: addr(params[0]),
@@ -217,7 +244,10 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyChar: result = module.ll_char
   of tyString: result = module.ll_nim_string
   of tySequence: result = get_seq_type(module, typ)
+  of tyDistinct: result = get_type(module, typ.lastSon)
+  of tyOpenArray: result = get_openarray_type(module, typ)
   else: echo "get_type: unknown type kind: ", typ.kind
   if result == nil:
     echo "get_type fail: ", typ.kind
-  echo ">>>>> mapped type: ", typ.kind, " ----> ", llvm.getTypeKind(result)
+  #echo ">>>>> mapped type: ", typ.kind, " ----> ", llvm.getTypeKind(result)
+

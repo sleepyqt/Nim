@@ -371,6 +371,10 @@ var getIntTypeWidth*: proc(integerTy: TypeRef): cuint {.dll.}
 
 var constReal*: proc(realTy: TypeRef; n: cdouble): ValueRef {.dll.}
 var buildSelect*: proc(a2: BuilderRef; `if`: ValueRef; then: ValueRef; `else`: ValueRef; name: cstring): ValueRef {.dll.}
+var setGlobalConstant*: proc(globalVar: ValueRef; isConstant: Bool) {.dll.}
+
+var buildExtractValue*: proc(a2: BuilderRef; aggVal: ValueRef; index: cuint; name: cstring): ValueRef {.dll.}
+var buildInsertValue*: proc(a2: BuilderRef; aggVal: ValueRef; eltVal: ValueRef; index: cuint; name: cstring): ValueRef {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -621,3 +625,9 @@ proc ll_load_dll*: bool =
     get_proc(lib, constReal, "LLVMConstReal")
 
     get_proc(lib, buildSelect, "LLVMBuildSelect")
+
+    get_proc(lib, setGlobalConstant, "LLVMSetGlobalConstant")
+
+    get_proc(lib, buildExtractValue, "LLVMBuildExtractValue")
+    get_proc(lib, buildInsertValue, "LLVMBuildInsertValue")
+

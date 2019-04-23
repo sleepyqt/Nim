@@ -1,8 +1,8 @@
 from modulegraphs import PPassContext, ModuleGraph
-import ast
+import ast, types
 from options import ConfigRef
 from sighashes import SigHash, hash, `==`, hashProc, hashNonProc, `$`
-from msgs import toFullPath
+from msgs import toFullPath, internalError
 from lineinfos import FileIndex
 from pathutils import AbsoluteFile
 from platform import TSystemCPU, TSystemOS
@@ -10,6 +10,11 @@ import tables
 import llvm_dll as llvm
 
 type
+  PlatformABI* = enum
+    Generic
+    AMD64_SystemV
+    AMD64_Windows
+
   BScope* = ref object
     parent*: BScope
     proc_val*: ValueRef
@@ -19,6 +24,7 @@ type
     return_target*: BasicBlockRef
 
   BModule* = ref object of PPassContext
+    abi*: PlatformABI
     module_sym*: PSym
     top_scope*: BScope
     module_list*: BModuleList
@@ -32,6 +38,8 @@ type
     ll_float32*, ll_float64*: TypeRef
     ll_cstring*, ll_nim_string*: TypeRef
     ll_pointer*: TypeRef
+    # what the ...
+    ll_int24*, ll_int40*, ll_int48*, ll_int56*: TypeRef
     # intrisics
     ll_memcpy32*, ll_memcpy64*: TypeRef
     ll_memset32*, ll_memset64*: TypeRef
@@ -53,6 +61,9 @@ type
     sig_collisions*: CountTable[SigHash]
 
 # ------------------------------------------------------------------------------
+
+proc ice*(module: BModule; message: string) =
+  internalError(module.module_list.config, message)
 
 proc `$`*(x: TypeRef): string =
   if x == nil:
@@ -92,6 +103,52 @@ proc constant_int*(module: BModule; value: int64): ValueRef =
 
 # ------------------------------------------------------------------------------
 
+proc is_signed_type*(typ: PType): bool =
+  typ.kind in {tyInt .. tyInt64}
+
+proc get_type_size*(module: BModule; typ: PType): BiggestInt =
+  result = getSize(module.module_list.config, typ)
+
+proc get_type_align*(module: BModule; typ: PType): BiggestInt =
+  result = getAlign(module.module_list.config, typ)
+
+# ------------------------------------------------------------------------------
+
+template ensure_type_kind*(val: ValueRef; kind: TypeKind) =
+  when true:
+    assert val != nil
+    let typ = llvm.typeOf(val)
+    if llvm.getTypeKind(typ) != kind:
+      let type_name = llvm.printTypeToString(typ)
+      let value_name = llvm.printValueToString(val)
+      echo "#### ensure_type_kind fail:"
+      echo "#### value = ", value_name
+      echo "#### type  = ", type_name
+      disposeMessage(type_name)
+      disposeMessage(value_name)
+      #assert false
+
+proc maybe_terminate*(module: BModule; target: BasicBlockRef) =
+  # try to terminate current block
+  if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
+    discard llvm.buildBr(module.ll_builder, target)
+
+proc insert_entry_alloca*(module: BModule; typ: TypeRef; name: cstring): ValueRef =
+  # insert `alloca` instruction at function entry point
+  let incoming_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun         = llvm.getBasicBlockParent(incoming_bb)
+  let entry_bb    = llvm.getEntryBasicBlock(fun)
+  let first       = llvm.getFirstInstruction(entry_bb)
+  if first == nil:
+    llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  else:
+    llvm.positionBuilderBefore(module.ll_builder, first)
+  result = llvm.buildAlloca(module.ll_builder, typ, name)
+  # restore position
+  llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
+
+# ------------------------------------------------------------------------------
+
 proc newModuleList*(graph: ModuleGraph): BModuleList =
   new(result)
   result.graph = graph
@@ -116,12 +173,21 @@ proc setup_codegen(module: var BModule) =
     else: assert(false, "unsupported CPU")
 
     case config.target.targetOS:
-    of osWindows:  (triple.add "pc-"; triple.add "win32-"; triple.add "gnu")
-    of osLinux:    (triple.add "pc-"; triple.add "linux-"; triple.add "gnu")
-    of osMacosx:   (triple.add "apple-"; triple.add "darwin")
+    of osWindows:    (triple.add "pc-"; triple.add "win32-"; triple.add "gnu")
+    of osLinux:      (triple.add "pc-"; triple.add "linux-"; triple.add "gnu")
+    of osMacosx:     (triple.add "apple-"; triple.add "darwin")
+    of osStandalone: (triple.add "pc-"; triple.add "unknown-"; triple.add "gnu")
     else: assert(false, "unsupported OS")
 
+    if (config.target.targetCPU == cpuAMD64) and (config.target.targetOS == osLinux):
+      module.abi = PlatformABI.AMD64_SystemV
+    elif (config.target.targetCPU == cpuAMD64) and (config.target.targetOS == osWindows):
+      module.abi = PlatformABI.AMD64_Windows
+    elif (config.target.targetCPU == cpuAMD64) and (config.target.targetOS == osStandalone):
+      module.abi = PlatformABI.AMD64_SystemV
+
     echo "target triple: ", triple
+    echo "abi: ", module.abi
 
     var target: llvm.TargetRef = nil
     var err: cstring
@@ -149,6 +215,10 @@ proc setup_codegen(module: var BModule) =
     module.ll_int16 = llvm.int16TypeInContext(module.ll_context)
     module.ll_int32 = llvm.int32TypeInContext(module.ll_context)
     module.ll_int64 = llvm.int64TypeInContext(module.ll_context)
+    module.ll_int24 = llvm.intTypeInContext(module.ll_context, 24)
+    module.ll_int40 = llvm.intTypeInContext(module.ll_context, 40)
+    module.ll_int48 = llvm.intTypeInContext(module.ll_context, 48)
+    module.ll_int56 = llvm.intTypeInContext(module.ll_context, 56)
     module.ll_float32 = llvm.floatTypeInContext(module.ll_context)
     module.ll_float64 = llvm.doubleTypeInContext(module.ll_context)
     module.ll_cstring = llvm.pointerType(module.ll_char, 0)
@@ -262,13 +332,13 @@ proc gen_main_module*(module: BModule) =
 # Scope Stack ------------------------------------------------------------------
 
 proc open_scope*(module: BModule) =
-  echo "OPEN SCOPE"
+  #echo "OPEN SCOPE"
   var scope = BScope()
   scope.parent = module.top_scope
   module.top_scope = scope
 
 proc close_scope*(module: BModule) =
-  echo "CLOSE SCOPE"
+  #echo "CLOSE SCOPE"
   module.top_scope = module.top_scope.parent
 
 iterator lookup*(module: BModule): BScope =
