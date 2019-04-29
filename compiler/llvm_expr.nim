@@ -19,7 +19,7 @@ proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
   assert typ != nil
   echo "gen_copy typ: ", typ.kind
   case typ.kind:
-  of tyObject, tyArray, tyTuple:
+  of tyObject, tyArray, tyTuple, tyOpenArray:
     ensure_type_kind(lhs, PointerTypeKind)
     ensure_type_kind(rhs, PointerTypeKind)
     let dst = llvm.buildBitCast(module.ll_builder, lhs, module.ll_pointer, "")
@@ -38,7 +38,9 @@ proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
     assert false
   of tySequence:
     assert false
-  else: assert(false)
+  else:
+    echo "gen_copy lhs: ", lhs, ", rhs: ", rhs
+    assert(false)
 
 proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
   assert typ != nil
@@ -237,6 +239,21 @@ proc gen_magic_dec(module: BModule; node: PNode) =
   let new_value = llvm.buildSub(module.ll_builder, value, increment, "dec")
   discard llvm.buildStore(module.ll_builder, new_value, adr)
 
+proc gen_magic_length(module: BModule; node: PNode): ValueRef =
+  echo "gen_magic_length"
+  let sym_node = if node[1].kind == nkHiddenDeref: node[1][0] else: node[1]
+  #debug sym_node
+  case sym_node.typ.kind:
+  of tyOpenArray:
+    let struct = gen_expr_lvalue(module, sym_node)
+    ensure_type_kind(struct, PointerTypeKind)
+    let len_field = struct_field_ptr(module, struct, constant(module, 1i32), "openarray.len")
+    ensure_type_kind(len_field, PointerTypeKind)
+    result = llvm.buildLoad(module.ll_builder, len_field, "magic.openarray.len")
+    ensure_type_kind(result, IntegerTypeKind)
+  else:
+    assert false
+
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
   proc unary(prc: UnaryProc): ValueRef =
@@ -402,6 +419,7 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mEcho: gen_magic_echo(module, node)
   of mInc: gen_magic_inc(module, node)
   of mDec: gen_magic_dec(module, node)
+  of mLengthOpenArray: result = gen_magic_length(module, node)
   #of mOrd: discard
   else: echo "unknown magic: ", op
 
@@ -750,10 +768,10 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
   of skVar, skForVar, skResult, skLet, skParam:
     let alloca = gen_sym_expr_lvalue(module, node)
     case node.sym.typ.kind:
-    of tyObject, tyArray, tyTuple:
+    of tyObject, tyArray, tyTuple, tyOpenArray:
       result = alloca
     else:
-      result = llvm.buildLoad(module.ll_builder, alloca, "")
+      result = llvm.buildLoad(module.ll_builder, alloca, "gen_sym_expr.deref")
   of skTemp:
     discard
   else: echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
@@ -831,7 +849,7 @@ proc gen_dot_expr_lvalue(module: BModule; node: PNode): ValueRef =
 
 proc gen_dot_expr(module: BModule; node: PNode): ValueRef =
   let adr = gen_dot_expr_lvalue(module, node)
-  result = llvm.buildLoad(module.ll_builder, adr, "")
+  result = llvm.buildLoad(module.ll_builder, adr, "gen_dot_expr.deref")
 
 proc gen_checked_field_lvalue(module: BModule; node: PNode): ValueRef =
   # todo: field checks
@@ -839,7 +857,7 @@ proc gen_checked_field_lvalue(module: BModule; node: PNode): ValueRef =
 
 proc gen_checked_field_expr(module: BModule; node: PNode): ValueRef =
   let adr = gen_checked_field_lvalue(module, node)
-  result = llvm.buildLoad(module.ll_builder, adr, "")
+  result = llvm.buildLoad(module.ll_builder, adr, "gen_checked_field_expr.deref")
 
 # ------------------------------------------------------------------------------
 
@@ -853,15 +871,19 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
   case node[0].typ.kind:
   of tyArray:
     var indices = [constant_int(module, 0), rhs]
-    result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "")
+    result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "array.index")
   of tyUncheckedArray:
     assert false
   of tyOpenArray:
-    assert false
+    let adr_field_data = struct_field_ptr(module, lhs, constant(module, 0i32), "openarray.data")
+    let adr_field_lengt = struct_field_ptr(module, lhs, constant(module, 1i32), "openarray.length")
+    let data_ptr = llvm.buildLoad(module.ll_builder, adr_field_data, "openarray.deref")
+    var indices = [rhs]
+    result = llvm.buildGEP(module.ll_builder, data_ptr, addr indices[0], cuint len indices, "openarray.index")
   of tyCString:
     var indices = [rhs]
-    let adr = llvm.buildLoad(module.ll_builder, lhs, "")
-    result = llvm.buildGEP(module.ll_builder, adr, addr indices[0], cuint len indices, "")
+    let adr = llvm.buildLoad(module.ll_builder, lhs, "cstring.deref")
+    result = llvm.buildGEP(module.ll_builder, adr, addr indices[0], cuint len indices, "cstring.index")
   of tyString:
     assert false
   of tySequence:
@@ -873,7 +895,7 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
 
 proc gen_bracket_expr(module: BModule; node: PNode): ValueRef =
   let adr = gen_bracket_expr_lvalue(module, node)
-  result = llvm.buildLoad(module.ll_builder, adr, "")
+  result = llvm.buildLoad(module.ll_builder, adr, "gen_bracket_expr.deref")
 
 # ------------------------------------------------------------------------------
 

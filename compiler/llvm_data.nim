@@ -83,6 +83,22 @@ proc `$`*(x: ValueRef): string =
 
 # ------------------------------------------------------------------------------
 
+template ensure_type_kind*(val: ValueRef; kind: TypeKind) =
+  when true:
+    assert val != nil
+    let typ = llvm.typeOf(val)
+    if llvm.getTypeKind(typ) != kind:
+      let type_name = llvm.printTypeToString(typ)
+      let value_name = llvm.printValueToString(val)
+      echo "#### ensure_type_kind fail:"
+      echo "#### value = ", value_name
+      echo "#### type  = ", type_name
+      disposeMessage(type_name)
+      disposeMessage(value_name)
+      #assert false
+
+# ------------------------------------------------------------------------------
+
 proc constant*(module: BModule; value: int8): ValueRef =
   result = llvm.constInt(module.ll_int8, culonglong value, Bool 1)
 
@@ -103,6 +119,13 @@ proc constant_int*(module: BModule; value: int64): ValueRef =
 
 # ------------------------------------------------------------------------------
 
+proc struct_field_ptr*(module: BModule; struct, index: ValueRef; hint = "struct.index"): ValueRef =
+  ensure_type_kind(struct, PointerTypeKind)
+  var indices = [constant(module, 0i32), index]
+  result = llvm.buildGEP(module.ll_builder, struct, addr indices[0], 2, hint)
+
+# ------------------------------------------------------------------------------
+
 proc is_signed_type*(typ: PType): bool =
   typ.kind in {tyInt .. tyInt64}
 
@@ -113,20 +136,6 @@ proc get_type_align*(module: BModule; typ: PType): BiggestInt =
   result = getAlign(module.module_list.config, typ)
 
 # ------------------------------------------------------------------------------
-
-template ensure_type_kind*(val: ValueRef; kind: TypeKind) =
-  when true:
-    assert val != nil
-    let typ = llvm.typeOf(val)
-    if llvm.getTypeKind(typ) != kind:
-      let type_name = llvm.printTypeToString(typ)
-      let value_name = llvm.printValueToString(val)
-      echo "#### ensure_type_kind fail:"
-      echo "#### value = ", value_name
-      echo "#### type  = ", type_name
-      disposeMessage(type_name)
-      disposeMessage(value_name)
-      #assert false
 
 proc maybe_terminate*(module: BModule; target: BasicBlockRef) =
   # try to terminate current block
@@ -173,7 +182,7 @@ proc setup_codegen(module: var BModule) =
     else: assert(false, "unsupported CPU")
 
     case config.target.targetOS:
-    of osWindows:    (triple.add "pc-"; triple.add "win32-"; triple.add "gnu")
+    of osWindows:    (triple.add "pc-"; triple.add "windows-"; triple.add "msvc")
     of osLinux:      (triple.add "pc-"; triple.add "linux-"; triple.add "gnu")
     of osMacosx:     (triple.add "apple-"; triple.add "darwin")
     of osStandalone: (triple.add "pc-"; triple.add "unknown-"; triple.add "gnu")
@@ -199,6 +208,9 @@ proc setup_codegen(module: var BModule) =
     var reloc = llvm.RelocDefault
     var model = llvm.CodeModelDefault
     module.ll_machine = llvm.createTargetMachine(target, triple, cpu, features, opt_level, reloc, model)
+    let layout = llvm.createTargetDataLayout(module.ll_machine)
+    llvm.setTarget(module.ll_module, triple)
+    llvm.setModuleDataLayout(module.ll_module, layout)
 
   block:
     module.ll_void = llvm.voidTypeInContext(module.ll_context)

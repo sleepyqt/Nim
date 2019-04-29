@@ -22,6 +22,7 @@ type
   PassRegistryRef* = ptr object
   AttributeRef* = ptr object
   UseRef* = ptr object
+  TargetDataRef* = ptr object
 
 type
   CodeGenOptLevel* {.size: sizeof(cint).} = enum
@@ -376,6 +377,12 @@ var setGlobalConstant*: proc(globalVar: ValueRef; isConstant: Bool) {.dll.}
 var buildExtractValue*: proc(a2: BuilderRef; aggVal: ValueRef; index: cuint; name: cstring): ValueRef {.dll.}
 var buildInsertValue*: proc(a2: BuilderRef; aggVal: ValueRef; eltVal: ValueRef; index: cuint; name: cstring): ValueRef {.dll.}
 
+var setSourceFileName*: proc(m: ModuleRef; name: cstring; len: csize) {.dll.}
+var setDataLayout*: proc(m: ModuleRef; dataLayoutStr: cstring) {.dll.}
+var setModuleDataLayout*: proc(m: ModuleRef; dl: TargetDataRef) {.dll.}
+var setTarget*: proc(m: ModuleRef; triple: cstring) {.dll.}
+var createTargetDataLayout*: proc(t: TargetMachineRef): TargetDataRef {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -631,3 +638,17 @@ proc ll_load_dll*: bool =
     get_proc(lib, buildExtractValue, "LLVMBuildExtractValue")
     get_proc(lib, buildInsertValue, "LLVMBuildInsertValue")
 
+    get_proc(lib, setSourceFileName, "LLVMSetSourceFileName")
+    get_proc(lib, setDataLayout, "LLVMSetDataLayout")
+
+    get_proc(lib, setModuleDataLayout, "LLVMSetModuleDataLayout")
+    get_proc(lib, setTarget, "LLVMSetTarget")
+    get_proc(lib, createTargetDataLayout, "LLVMCreateTargetDataLayout")
+
+# ------------------------------------------------------------------------------
+
+proc set_value_name*(value: ValueRef; name: cstring) =
+  if setValueName2 == nil:
+    discard
+  else:
+    setValueName2(value, name, csize len name)

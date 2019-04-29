@@ -137,7 +137,9 @@ proc get_proc_param_type*(module: BModule; typ: PType): TypeRef =
 proc get_proc_type*(module: BModule; typ: PType): TypeRef =
   var params = newSeq[TypeRef]()
 
-  var state = abi_init_func_state(module)
+  let abi = module.abi
+
+  var state = abi_init_func_state(module, abi)
 
   # return type
   var return_type: TypeRef = nil
@@ -145,7 +147,7 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
   if typ[0] == nil:
     return_type = module.ll_void
   else:
-    case abi_classify_return(module, typ[0], state):
+    case abi_classify_return(module, abi, typ[0], state):
     of ParamClass.Direct:
       return_type = get_proc_param_type(module, typ[0])
     of ParamClass.Indirect:
@@ -154,16 +156,16 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
     of ParamClass.Extend:
       return_type = get_proc_param_type(module, typ[0])
     of ParamClass.Coerce1:
-      var coerced = abi_coerce1(module, typ[0])
+      var coerced = abi_coerce1(module, abi, typ[0])
       return_type = coerced
     of ParamClass.Coerce2:
-      var coerced = abi_coerce2(module, typ[0])
+      var coerced = abi_coerce2(module, abi, typ[0])
       return_type = llvm.structTypeInContext(module.ll_context, addr coerced[0], cuint 2, Bool false)
 
   # formal parameters types
   for param in typ.n.sons[1 .. ^1]:
     if isCompileTimeOnly(param.typ): continue
-    case abi_classify(module, param.typ, state):
+    case abi_classify(module, abi, param.typ, state):
     of ParamClass.Direct:
       params.add get_proc_param_type(module, param.typ)
     of ParamClass.Indirect:
@@ -171,10 +173,10 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
     of ParamClass.Extend:
       params.add get_proc_param_type(module, param.typ)
     of ParamClass.Coerce1:
-      let coerced = abi_coerce1(module, param.typ)
+      let coerced = abi_coerce1(module, abi, param.typ)
       params.add coerced
     of ParamClass.Coerce2:
-      let coerced = abi_coerce2(module, param.typ)
+      let coerced = abi_coerce2(module, abi, param.typ)
       params.add coerced[0]
       params.add coerced[1]
 
@@ -240,7 +242,8 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyEnum: result = get_enum_type(module, typ)
   of tyCString: result = module.ll_cstring
   of tySet: result = get_set_type(module, typ)
-  of tyPtr, tyRef, tyVar, tyLent: result = get_ptr_type(module, typ)
+  of tyPtr, tyRef: result = get_ptr_type(module, typ)
+  of tyVar: result = llvm.pointerType(get_type(module, elemType(typ)), 0)
   of tyChar: result = module.ll_char
   of tyString: result = module.ll_nim_string
   of tySequence: result = get_seq_type(module, typ)
