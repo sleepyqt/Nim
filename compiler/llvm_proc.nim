@@ -15,6 +15,7 @@ proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
 
 proc gen_proc*(module: BModule; sym: PSym): ValueRef =
   assert sym != nil
+
   if (sfBorrow in sym.flags) or (sym.typ == nil):
     return
   result = module.get_value(sym.id)
@@ -41,7 +42,7 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
     let return_bb  = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "return")
     var ret_addr: ValueRef # addres of *result* variable
 
-    let abi = module.abi
+    let abi = get_abi(module)
 
     module.add_value(sym.id, proc_val)
 
@@ -51,113 +52,103 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
 
     llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
 
-    # generate formal parameters and implicit *result* variable
+    # - - - - - generate result parameter - - - - -
 
-    var state = abi_init_func_state(module, abi)
     var ast_param_index = 0
     var ir_param_index = 0
 
+    var ret_info: ArgInfo
     if ret_type == nil:
       discard
     else:
-      case abi_classify_return(module, abi, ret_type, state)
+      ret_info = abi.classify_return_type(module, ret_type)
 
-      # passed directly in register
-      of ParamClass.Direct:
+      case ret_info.class:
+
+      of ArgClass.Direct:
         ret_addr = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
         module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
 
-      # passed by pointer as first argument
-      of ParamClass.Indirect:
-        llvm.addAttributeAtIndex(proc_val, AttributeIndex 1, module.ll_sret)
+        if ArgFlag.Sext in ret_info.flags: llvm.addAttributeAtIndex(proc_val, AttributeIndex 0, module.ll_signext)
+        if ArgFlag.Zext in ret_info.flags: llvm.addAttributeAtIndex(proc_val, AttributeIndex 0, module.ll_zeroext)
+
+      of ArgClass.Indirect:
         ret_addr = llvm.getParam(proc_val, cuint 0)
         llvm.set_value_name(ret_addr, "result")
         module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
+
+        llvm.addAttributeAtIndex(proc_val, AttributeIndex 1, module.ll_sret)
+
         inc ir_param_index
 
-      of ParamClass.Coerce1:
-        let coerced = abi_coerce1(module, abi, ret_type)
+      of ArgClass.Expand:
         ret_addr = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
         module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
 
-      of ParamClass.Coerce2:
-        let coerced = abi_coerce2(module, abi, ret_type)
-        ret_addr = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
-        module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
-
-      of ParamClass.Extend:
-        ret_addr = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
-        llvm.addAttributeAtIndex(proc_val, AttributeIndex 0, module.ll_zeroext)
-        module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
-
-    # *** formal parameters ***
+    # - - - - -  geberate formal parameters - - - - -
 
     for ast_param in sym.typ.n.sons[1 .. ^1]:
-      let param_class = abi_classify(module, abi, ast_param.typ, state)
+      let arg_info = abi.classify_argument_type(module, ast_param.typ)
 
-      echo "param: ", ast_param.sym.name.s, ", type: ", ast_param.typ.kind, ", class: ", param_class
+      echo "param: ", ast_param.sym.name.s, ", type: ", ast_param.typ.kind, ", class: ", arg_info.class
 
-      case param_class
+      case arg_info.class
 
-      # passed directly in register
-      of ParamClass.Direct:
-        # copy to local variable
+      of ArgClass.Direct:
         let ll_type   = get_proc_param_type(module, ast_param.typ)
         let local_adr = insert_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
         let value     = llvm.getParam(proc_val, cuint ir_param_index)
         discard llvm.buildStore(module.ll_builder, value, local_adr)
         module.add_value(ast_param.sym.id, local_adr)
         llvm.set_value_name(value, ast_param.sym.name.s)
+
+        if ArgFlag.Sext in arg_info.flags: llvm.addAttributeAtIndex(proc_val, AttributeIndex ir_param_index + 1, module.ll_signext)
+        if ArgFlag.Zext in arg_info.flags: llvm.addAttributeAtIndex(proc_val, AttributeIndex ir_param_index + 1, module.ll_zeroext)
+
         inc ir_param_index
 
-      # passed indirectly as pointer
-      of ParamClass.Indirect:
+      of ArgClass.Indirect:
         llvm.addAttributeAtIndex(proc_val, AttributeIndex ir_param_index + 1, module.ll_byval)
         let value = llvm.getParam(proc_val, cuint ir_param_index)
         module.add_value(ast_param.sym.id, value)
         llvm.set_value_name(value, ast_param.sym.name.s)
         inc ir_param_index
 
-      # coerced into single register
-      of ParamClass.Coerce1:
-        let coerced   = abi_coerce1(module, abi, ast_param.typ)
+      of ArgClass.Expand:
         let ll_type   = get_proc_param_type(module, ast_param.typ)
         let local_adr = insert_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
-        let value     = llvm.getParam(proc_val, cuint ir_param_index)
-        let abi_cast  = llvm.buildBitCast(module.ll_builder, local_adr, llvm.pointerType(coerced, 0), "abi_cast")
-        discard llvm.buildStore(module.ll_builder, value, abi_cast)
         module.add_value(ast_param.sym.id, local_adr)
-        llvm.set_value_name(value, ast_param.sym.name.s)
-        inc ir_param_index
 
-      # coerced into two registers
-      of ParamClass.Coerce2:
-        var coerced   = abi_coerce2(module, abi, ast_param.typ)
-        let ll_type   = get_proc_param_type(module, ast_param.typ)
-        let local_adr = insert_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
-        let value0    = llvm.getParam(proc_val, cuint ir_param_index + 0)
-        let value1    = llvm.getParam(proc_val, cuint ir_param_index + 1)
-        llvm.set_value_name(value0, ast_param.sym.name.s)
-        llvm.set_value_name(value1, ast_param.sym.name.s)
-        module.add_value(ast_param.sym.id, local_adr)
-        let cast_type = llvm.structTypeInContext(module.ll_context, addr coerced[0], cuint 2, Bool 0)
-        let abi_cast  = llvm.buildBitCast(module.ll_builder, local_adr, llvm.pointerType(cast_type, 0), "abi_cast")
-        var indices0  = [constant(module, 0i32), constant(module, 0i32)]
-        var indices1  = [constant(module, 0i32), constant(module, 1i32)]
-        let adr0 = llvm.buildGEP(module.ll_builder, abi_cast, addr indices0[0], 2, "")
-        let adr1 = llvm.buildGEP(module.ll_builder, abi_cast, addr indices1[0], 2, "")
-        discard llvm.buildStore(module.ll_builder, value0, adr0)
-        discard llvm.buildStore(module.ll_builder, value1, adr1)
-        inc ir_param_index, 2
+        if ExpandToWords in arg_info.flags:
+          var expanded     = expand_struct_to_words(module, ast_param.typ)
+          let bitcast_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool 0)
+          let abi_cast     = llvm.buildBitCast(module.ll_builder, local_adr, llvm.pointerType(bitcast_type, 0), "abi_cast")
+          for i, item in expanded:
+            let value = llvm.getParam(proc_val, cuint ir_param_index)
+            llvm.set_value_name(value, ast_param.sym.name.s & "." & $i)
 
-      # passed directly, zero or sign extended
-      of ParamClass.Extend:
-        inc ir_param_index
+            var indices = [constant(module, 0i32), constant(module, int32 i)]
+            let adr = llvm.buildGEP(module.ll_builder, abi_cast, addr indices[0], 2, "")
+            discard llvm.buildStore(module.ll_builder, value, adr)
+
+            inc ir_param_index
+        else:
+          var expanded = expand_struct(module, ll_type)
+          for i, item in expanded:
+            let value = llvm.getParam(proc_val, cuint ir_param_index)
+            llvm.set_value_name(value, ast_param.sym.name.s & "." & $i)
+
+            var indices = [constant(module, 0i32), constant(module, int32 i)]
+            let adr = llvm.buildGEP(module.ll_builder, local_adr, addr indices[0], 2, "")
+            discard llvm.buildStore(module.ll_builder, value, adr)
+
+            inc ir_param_index
 
       inc ast_param_index
     # end for
 
-    # generate body
+    # - - - - - generate body - - - - -
+
     let new_body = transformBody(module.module_list.graph, sym, cache = false)
     gen_stmt(module, new_body)
 
@@ -165,35 +156,28 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
     llvm.moveBasicBlockAfter(return_bb, llvm.getInsertBlock(module.ll_builder))
     llvm.positionBuilderAtEnd(module.ll_builder, return_bb)
 
-    # generate return block
+    # - - - - - generate return block - - - - -
 
     if ret_type == nil:
       discard llvm.buildRetVoid(module.ll_builder)
     else:
-      case abi_classify_return(module, abi, ret_type, state)
+      case ret_info.class:
 
-      of ParamClass.Direct:
+      of ArgClass.Direct:
         discard llvm.buildRet(module.ll_builder, llvm.buildLoad(module.ll_builder, ret_addr, ""))
 
-      of ParamClass.Indirect:
+      of ArgClass.Indirect:
         discard llvm.buildRetVoid(module.ll_builder)
 
-      of ParamClass.Coerce1:
-        let coerced  = abi_coerce1(module, abi, ret_type)
-        let abi_cast = llvm.buildBitCast(module.ll_builder, ret_addr, llvm.pointerType(coerced, 0), "abi_cast")
-        let value    = llvm.buildLoad(module.ll_builder, abi_cast, "")
-        discard llvm.buildRet(module.ll_builder, value)
-
-      of ParamClass.Coerce2:
-        var coerced  = abi_coerce2(module, abi, ret_type)
-        let struct   = llvm.structTypeInContext(module.ll_context, addr coerced[0], cuint 2, Bool false)
-        let abi_cast = llvm.buildBitCast(module.ll_builder, ret_addr, llvm.pointerType(struct, 0), "abi_cast")
-        let value    = llvm.buildLoad(module.ll_builder, abi_cast, "")
-        discard llvm.buildRet(module.ll_builder, value)
-
-      of ParamClass.Extend:
-        # todo
-        discard llvm.buildRet(module.ll_builder, llvm.buildLoad(module.ll_builder, ret_addr, ""))
+      of ArgClass.Expand:
+        if ExpandToWords in ret_info.flags:
+          var expanded = expand_struct_to_words(module, ret_type)
+          let bitcast_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool 0)
+          let abi_cast = llvm.buildBitCast(module.ll_builder, ret_addr, type_to_ptr bitcast_type, "abi_cast")
+          let value = llvm.buildLoad(module.ll_builder, abi_cast, "")
+          discard llvm.buildRet(module.ll_builder, value)
+        else:
+          assert false
 
     module.close_scope()
 
@@ -201,10 +185,13 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
 
     result = proc_val
 
-    echo "******* verifying proc ***********************"
+    echo "########################### VERIFYING PROC ###################################"
     #viewFunctionCFG(proc_val)
     discard verifyFunction(proc_val, PrintMessageAction)
+    echo ""
     echo "******* end gen_proc: ", sym.name.s, " *******"
+
+  discard
 
 # ------------------------------------------------------------------------------
 
@@ -219,31 +206,27 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
   let ret_type   = getReturnType(proc_sym)
   let callee_val = gen_expr(module, node[0])
 
-  let abi = module.abi
+  let abi = get_abi(module)
+
+  var ret_info: ArgInfo
 
   assert callee_val != nil
-
-  var state = abi_init_func_state(module, abi)
 
   if ret_type == nil:
     discard
   else:
-    case abi_classify_return(module, abi, ret_type, state)
+    ret_info = abi.classify_return_type(module, ret_type)
 
-    of ParamClass.Direct:
+    case ret_info.class
+
+    of ArgClass.Direct:
       discard
 
-    of ParamClass.Indirect:
+    of ArgClass.Indirect:
       result = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "call.tmp")
       args.add result
 
-    of ParamClass.Extend:
-      discard
-
-    of ParamClass.Coerce1:
-      result = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "call.tmp")
-
-    of ParamClass.Coerce2:
+    of ArgClass.Expand:
       result = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "call.tmp")
 
     # end case
@@ -252,77 +235,55 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
 
   var ast_arg_index = 1
   for ast_arg in node.sons[1 .. ^1]:
-    let arg_value  = gen_expr(module, ast_arg)
-    let arg_type   = ast_arg.typ
+    let arg_value = gen_expr(module, ast_arg)
+    let arg_type  = ast_arg.typ
+    let arg_info  = abi.classify_argument_type(module, arg_type)
 
-    case abi_classify(module, abi, arg_type, state)
+    case arg_info.class
 
-    of ParamClass.Direct:
-      args.add arg_value
+    of ArgClass.Direct:
+      if arg_type.kind in {tyBool}:
+        args.add llvm.buildTrunc(module.ll_builder, arg_value, module.ll_logic_bool, "call_bool_trunc")
+      else:
+        args.add arg_value
 
-    of ParamClass.Indirect:
-      if arg_type.kind in {tyArray}:
+    of ArgClass.Indirect:
+    #[if arg_type.kind in {tyArray}:
         let param_type = proc_sym.typ.n.sons[ast_arg_index].typ
-        # check if array need to be converted into openArray
+
         if param_type.kind in {tyOpenArray}:
-          let ll_param_type = get_proc_param_type(module, param_type)
-
-          # allocate struct for openArray
-          let arg_open_array = insert_entry_alloca(module, ll_param_type, "arg_open_array")
-
-          let elem_count = cuint lengthOrd(module.module_list.config, arg_type)
-
-          var indices0 = [constant(module, 0i32), constant(module, 0i32)]
-          var indices1 = [constant(module, 0i32), constant(module, 1i32)]
+          # convert array[T] -> openArray[T]
 
           # get pointer to array first element. *T
-          let array_ptr = llvm.buildGEP(module.ll_builder, arg_value, addr indices0[0], 2, "")
+          var indices = [constant(module, 0i32), constant(module, 0i32)]
+          let data_ptr = llvm.buildGEP(module.ll_builder, arg_value, addr indices[0], 2, "")
 
-          # get pointers to openArray struct fields
-          # pointer to data. *T
-          let adr0 = llvm.buildGEP(module.ll_builder, arg_open_array, addr indices0[0], 2, "")
+          args.add data_ptr
+          args.add constant(module, int lengthOrd(module.module_list.config, arg_type))
 
-          # pointer to length. *int
-          let adr1 = llvm.buildGEP(module.ll_builder, arg_open_array, addr indices1[0], 2, "")
+          inc ast_arg_index
+          continue]#
 
-          discard llvm.buildStore(module.ll_builder, array_ptr, adr0)
-          discard llvm.buildStore(module.ll_builder, constant(module, int(elem_count)), adr1)
-          args.add arg_open_array
-        else:
-          let ll_arg_type = get_proc_param_type(module, arg_type)
-          let arg_copy    = insert_entry_alloca(module, ll_arg_type, "arg_copy")
-          gen_copy(module, arg_copy, arg_value, arg_type)
-          args.add arg_copy
+      let ll_arg_type = get_proc_param_type(module, arg_type)
+      let arg_copy    = insert_entry_alloca(module, ll_arg_type, "arg_copy")
+      gen_copy(module, arg_copy, arg_value, arg_type)
+      args.add arg_copy
+
+    of ArgClass.Expand:
+      let ll_arg_type = get_proc_param_type(module, arg_type)
+      let arg_copy    = insert_entry_alloca(module, ll_arg_type, "arg_copy")
+      gen_copy(module, arg_copy, arg_value, arg_type)
+
+      if ExpandToWords in arg_info.flags:
+        var expanded     = expand_struct_to_words(module, arg_type)
+        let bitcast_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool 0)
+        let abi_cast     = llvm.buildBitCast(module.ll_builder, arg_copy, type_to_ptr bitcast_type, "abi_cast")
+        for i, item in expanded:
+          var indices = [constant(module, 0i32), constant(module, int32 i)]
+          let adr = llvm.buildGEP(module.ll_builder, abi_cast, addr indices[0], 2, "")
+          args.add llvm.buildLoad(module.ll_builder, adr, "")
       else:
-        let ll_arg_type = get_proc_param_type(module, arg_type)
-        let arg_copy    = insert_entry_alloca(module, ll_arg_type, "arg_copy")
-        gen_copy(module, arg_copy, arg_value, arg_type)
-        args.add arg_copy
-
-    of ParamClass.Extend:
-      args.add arg_value # todo
-
-    of ParamClass.Coerce1:
-      let coerced     = abi_coerce1(module, abi, arg_type)
-      let ll_arg_type = get_proc_param_type(module, arg_type)
-      let arg_copy    = insert_entry_alloca(module, ll_arg_type, "arg_copy")
-      gen_copy(module, arg_copy, arg_value, arg_type)
-      let abi_cast    = llvm.buildBitCast(module.ll_builder, arg_copy, llvm.pointerType(coerced, 0), "abi_cast")
-      args.add llvm.buildLoad(module.ll_builder, abi_cast, "")
-
-    of ParamClass.Coerce2:
-      var coerced     = abi_coerce2(module, abi, arg_type)
-      let ll_arg_type = get_proc_param_type(module, arg_type)
-      let arg_copy    = insert_entry_alloca(module, ll_arg_type, "arg_copy")
-      gen_copy(module, arg_copy, arg_value, arg_type)
-      let cast_type   = llvm.structTypeInContext(module.ll_context, addr coerced[0], cuint 2, Bool 0)
-      let abi_cast    = llvm.buildBitCast(module.ll_builder, arg_copy, llvm.pointerType(cast_type, 0), "abi_cast")
-      var indices0    = [constant(module, 0i32), constant(module, 0i32)]
-      var indices1    = [constant(module, 0i32), constant(module, 1i32)]
-      let adr0        = llvm.buildGEP(module.ll_builder, abi_cast, addr indices0[0], 2, "")
-      let adr1        = llvm.buildGEP(module.ll_builder, abi_cast, addr indices1[0], 2, "")
-      args.add llvm.buildLoad(module.ll_builder, adr0, "")
-      args.add llvm.buildLoad(module.ll_builder, adr1, "")
+        var expanded = expand_struct(module, ll_arg_type)
 
     # end case
 
@@ -335,37 +296,27 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
   if ret_type == nil:
     discard llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
   else:
-    case abi_classify_return(module, abi, ret_type, state)
+    case ret_info.class
 
-    of ParamClass.Direct:
+    of ArgClass.Direct:
       result = llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
 
-    of ParamClass.Indirect:
+    of ArgClass.Indirect:
       discard llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
 
-    of ParamClass.Extend:
-      result = llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
-
-    of ParamClass.Coerce1:
-      let call     = llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
-      let coerced  = abi_coerce1(module, abi, ret_type)
-      let abi_cast = llvm.buildBitCast(module.ll_builder, result, llvm.pointerType(coerced, 0), "abi_cast")
-      discard llvm.buildStore(module.ll_builder, call, abi_cast)
-
-    of ParamClass.Coerce2:
-      let call     = llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
-      var coerced  = abi_coerce2(module, abi, ret_type)
-      let struct   = llvm.structTypeInContext(module.ll_context, addr coerced[0], cuint 2, Bool false)
-      let abi_cast = llvm.buildBitCast(module.ll_builder, result, llvm.pointerType(struct, 0), "abi_cast")
-      var indices0 = [constant(module, 0i32), constant(module, 0i32)]
-      var indices1 = [constant(module, 0i32), constant(module, 1i32)]
-      let adr0     = llvm.buildGEP(module.ll_builder, abi_cast, addr indices0[0], 2, "")
-      let adr1     = llvm.buildGEP(module.ll_builder, abi_cast, addr indices1[0], 2, "")
-      let val0     = llvm.buildExtractValue(module.ll_builder, call, 0, "")
-      let val1     = llvm.buildExtractValue(module.ll_builder, call, 1, "")
-      discard llvm.buildStore(module.ll_builder, val0, adr0)
-      discard llvm.buildStore(module.ll_builder, val1, adr1)
-
+    of ArgClass.Expand:
+      if ExpandToWords in ret_info.flags:
+        let call         = llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
+        var expanded     = expand_struct_to_words(module, ret_type)
+        let bitcast_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool 0)
+        let abi_cast     = llvm.buildBitCast(module.ll_builder, result, type_to_ptr bitcast_type, "abi_cast")
+        for i, item in expanded:
+          var indices = [constant(module, 0i32), constant(module, int32 i)]
+          let adr = llvm.buildGEP(module.ll_builder, abi_cast, addr indices[0], 2, "")
+          let val = llvm.buildExtractValue(module.ll_builder, call, cuint i, "")
+          discard llvm.buildStore(module.ll_builder, val, adr)
+      else:
+        assert false
     # end case
 
 # ------------------------------------------------------------------------------

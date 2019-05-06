@@ -5,7 +5,7 @@ from sighashes import SigHash, hash, `==`, hashProc, hashNonProc, `$`
 from msgs import toFullPath, internalError
 from lineinfos import FileIndex
 from pathutils import AbsoluteFile
-from platform import TSystemCPU, TSystemOS
+from platform import TSystemCPU, TSystemOS, Target
 import tables
 import llvm_dll as llvm
 
@@ -14,6 +14,7 @@ type
     Generic
     AMD64_SystemV
     AMD64_Windows
+    X86
 
   BScope* = ref object
     parent*: BScope
@@ -52,7 +53,7 @@ type
     ll_builder*: BuilderRef
     ll_machine*: TargetMachineRef
     # attributes
-    ll_sret*, ll_byval*, ll_zeroext*: AttributeRef
+    ll_sret*, ll_byval*, ll_zeroext*, ll_signext*: AttributeRef
 
   BModuleList* = ref object of RootObj
     modules*: seq[BModule]
@@ -137,6 +138,25 @@ proc get_type_align*(module: BModule; typ: PType): BiggestInt =
 
 # ------------------------------------------------------------------------------
 
+proc i8_to_i1*(module: BModule; value: ValueRef): ValueRef =
+  assert value != nil
+  if llvm.getValueKind(value) == InstructionValueKind:
+    # eleminate common zext trunc combo
+    if llvm.getInstructionOpcode(value) == llvm.ZExt:
+      result = llvm.getOperand(value, 0)
+      if llvm.getFirstUse(value) == nil:
+        llvm.instructionEraseFromParent(value)
+      return
+  result = llvm.buildTrunc(module.ll_builder, value, module.ll_logic_bool, "")
+
+proc i1_to_i8*(module: BModule; value: ValueRef): ValueRef =
+  result = llvm.buildZExt(module.ll_builder, value, module.ll_bool, "")
+
+proc type_to_ptr*(value: TypeRef): TypeRef =
+  result = llvm.pointerType(value, 0)
+
+# ------------------------------------------------------------------------------
+
 proc maybe_terminate*(module: BModule; target: BasicBlockRef) =
   # try to terminate current block
   if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
@@ -158,13 +178,134 @@ proc insert_entry_alloca*(module: BModule; typ: TypeRef; name: cstring): ValueRe
 
 # ------------------------------------------------------------------------------
 
+proc expand_struct*(module: BModule; struct: TypeRef): seq[TypeRef] =
+  # {i8, i16, i32} -> i8, i16, i32
+  let count = int llvm.countStructElementTypes(struct)
+  setLen(result, count)
+  llvm.getStructElementTypes(struct, addr result[0])
+
+proc wrap_in_struct*(module: BModule; types: seq[TypeRef]): TypeRef =
+  # i8, i16, i32 -> {i8, i16, i32}
+  result = llvm.structTypeInContext(module.ll_context, unsafe_addr types[0], cuint len types, Bool false)
+
+proc expand_struct_to_words*(module: BModule; struct: PType): seq[TypeRef] =
+  # {i8, i16, i32} -> i32, i32
+  let size = get_type_size(module, struct)
+
+  case module.module_list.config.target.intSize:
+  of 8:
+    case size:
+    of  1 .. 8:  result = @[module.ll_int64]
+    of  9 .. 16: result = @[module.ll_int64, module.ll_int64]
+    of 17 .. 24: result = @[module.ll_int64, module.ll_int64, module.ll_int64]
+    of 25 .. 32: result = @[module.ll_int64, module.ll_int64, module.ll_int64, module.ll_int64]
+    else: assert false
+  of 4:
+    case size:
+    of 1 .. 4:   result = @[module.ll_int32]
+    of 5 .. 8:   result = @[module.ll_int32, module.ll_int32]
+    else: assert false
+  else:
+    assert false
+
+# ------------------------------------------------------------------------------
+
 proc newModuleList*(graph: ModuleGraph): BModuleList =
   new(result)
   result.graph = graph
   result.config = graph.config
   result.sig_collisions = initCountTable[SigHash]()
 
-proc setup_codegen(module: var BModule) =
+proc select_target_triple(target: Target): string =
+  case target.targetCPU:
+  of cpuI386:    result.add "i686-"
+  of cpuAMD64:   result.add "x86_64-"
+  else: assert false
+
+  case target.targetOS:
+  of osWindows:    result.add "pc-windows-msvc"
+  of osLinux:      result.add "pc-linux-gnu"
+  of osMacosx:     result.add "apple-darwin"
+  of osStandalone: result.add "pc-unknown-gnu"
+  else: assert(false, "unsupported OS")
+
+proc select_target_abi(target: Target): PlatformABI =
+  case target.targetCPU:
+  of cpuAMD64:
+    case target.targetOS:
+    of osLinux:       result = PlatformABI.AMD64_SystemV
+    of osWindows:     result = PlatformABI.AMD64_Windows
+    of osStandalone:  result = PlatformABI.AMD64_SystemV
+    else:             result = PlatformABI.Generic
+  of cpuI386:
+    case target.targetOS:
+    of osLinux:       result = PlatformABI.X86
+    of osWindows:     result = PlatformABI.X86
+    of osStandalone:  result = PlatformABI.X86
+    else:             result = PlatformABI.Generic
+  else:               result = PlatformABI.Generic
+
+proc cache_types(module: BModule) =
+  let config = module.module_list.config
+
+  # basic types
+
+  module.ll_void = llvm.voidTypeInContext(module.ll_context)
+  module.ll_char = llvm.int8TypeInContext(module.ll_context)
+  module.ll_bool = llvm.int8TypeInContext(module.ll_context)
+  module.ll_logic_bool = llvm.int1TypeInContext(module.ll_context)
+  if config.target.intSize == 8:
+    module.ll_int = llvm.int64TypeInContext(module.ll_context)
+  elif config.target.intSize == 4:
+    module.ll_int = llvm.int32TypeInContext(module.ll_context)
+  else:
+    assert(false, "unsupported int size")
+  module.ll_int8 = llvm.int8TypeInContext(module.ll_context)
+  module.ll_int16 = llvm.int16TypeInContext(module.ll_context)
+  module.ll_int32 = llvm.int32TypeInContext(module.ll_context)
+  module.ll_int64 = llvm.int64TypeInContext(module.ll_context)
+  module.ll_int24 = llvm.intTypeInContext(module.ll_context, 24)
+  module.ll_int40 = llvm.intTypeInContext(module.ll_context, 40)
+  module.ll_int48 = llvm.intTypeInContext(module.ll_context, 48)
+  module.ll_int56 = llvm.intTypeInContext(module.ll_context, 56)
+  module.ll_float32 = llvm.floatTypeInContext(module.ll_context)
+  module.ll_float64 = llvm.doubleTypeInContext(module.ll_context)
+  module.ll_cstring = llvm.pointerType(module.ll_char, 0)
+  module.ll_pointer = llvm.pointerType(module.ll_int8, 0)
+
+  # nim string
+
+  var nim_string_elements = [module.ll_int, module.ll_int, module.ll_cstring]
+  module.ll_nim_string = llvm.structTypeInContext(module.ll_context, addr nim_string_elements[0], cuint len nim_string_elements, Bool false)
+
+  # intrisics
+
+  var args_memcpy32 = [module.ll_pointer, module.ll_pointer, module.ll_int32, module.ll_logic_bool]
+  module.ll_memcpy32 = llvm.functionType(
+    returnType = module.ll_void,
+    paramTypes = addr args_memcpy32[0],
+    paramCount = cuint len args_memcpy32,
+    isVarArg = Bool 0)
+  var args_memcpy64 = [module.ll_pointer, module.ll_pointer, module.ll_int64, module.ll_logic_bool]
+  module.ll_memcpy64 = llvm.functionType(
+    returnType = module.ll_void,
+    paramTypes = addr args_memcpy64[0],
+    paramCount = cuint len args_memcpy64,
+    isVarArg = Bool 0)
+  var args_memset32 = [module.ll_pointer, module.ll_int8, module.ll_int32, module.ll_logic_bool]
+  module.ll_memset32 = llvm.functionType(
+    returnType = module.ll_void,
+    paramTypes = addr args_memset32[0],
+    paramCount = cuint len args_memset32,
+    isVarArg = Bool 0)
+  var args_memset64 = [module.ll_pointer, module.ll_int8, module.ll_int64, module.ll_logic_bool]
+  module.ll_memset64 = llvm.functionType(
+    returnType = module.ll_void,
+    paramTypes = addr args_memset64[0],
+    paramCount = cuint len args_memset64,
+    isVarArg = Bool 0)
+
+proc setup_codegen(module: BModule) =
   let config = module.module_list.config
 
   block:
@@ -177,23 +318,12 @@ proc setup_codegen(module: var BModule) =
     var cpu: cstring
 
     case config.target.targetCPU:
-    of cpuI386:    triple.add "i686-"; cpu = "i686"
-    of cpuAMD64:   triple.add "x86_64-"; cpu = "i686"
+    of cpuI386:  cpu = "i686"
+    of cpuAMD64: cpu = "i686"
     else: assert(false, "unsupported CPU")
 
-    case config.target.targetOS:
-    of osWindows:    (triple.add "pc-"; triple.add "windows-"; triple.add "msvc")
-    of osLinux:      (triple.add "pc-"; triple.add "linux-"; triple.add "gnu")
-    of osMacosx:     (triple.add "apple-"; triple.add "darwin")
-    of osStandalone: (triple.add "pc-"; triple.add "unknown-"; triple.add "gnu")
-    else: assert(false, "unsupported OS")
-
-    if (config.target.targetCPU == cpuAMD64) and (config.target.targetOS == osLinux):
-      module.abi = PlatformABI.AMD64_SystemV
-    elif (config.target.targetCPU == cpuAMD64) and (config.target.targetOS == osWindows):
-      module.abi = PlatformABI.AMD64_Windows
-    elif (config.target.targetCPU == cpuAMD64) and (config.target.targetOS == osStandalone):
-      module.abi = PlatformABI.AMD64_SystemV
+    triple = select_target_triple(config.target)
+    module.abi = select_target_abi(config.target)
 
     echo "target triple: ", triple
     echo "abi: ", module.abi
@@ -213,82 +343,6 @@ proc setup_codegen(module: var BModule) =
     llvm.setModuleDataLayout(module.ll_module, layout)
 
   block:
-    module.ll_void = llvm.voidTypeInContext(module.ll_context)
-    module.ll_char = llvm.int8TypeInContext(module.ll_context)
-    module.ll_bool = llvm.int8TypeInContext(module.ll_context)
-    module.ll_logic_bool = llvm.int1TypeInContext(module.ll_context)
-    if config.target.intSize == 8:
-      module.ll_int = llvm.int64TypeInContext(module.ll_context)
-    elif config.target.intSize == 4:
-      module.ll_int = llvm.int32TypeInContext(module.ll_context)
-    else:
-      assert(false, "unsupported int size")
-    module.ll_int8 = llvm.int8TypeInContext(module.ll_context)
-    module.ll_int16 = llvm.int16TypeInContext(module.ll_context)
-    module.ll_int32 = llvm.int32TypeInContext(module.ll_context)
-    module.ll_int64 = llvm.int64TypeInContext(module.ll_context)
-    module.ll_int24 = llvm.intTypeInContext(module.ll_context, 24)
-    module.ll_int40 = llvm.intTypeInContext(module.ll_context, 40)
-    module.ll_int48 = llvm.intTypeInContext(module.ll_context, 48)
-    module.ll_int56 = llvm.intTypeInContext(module.ll_context, 56)
-    module.ll_float32 = llvm.floatTypeInContext(module.ll_context)
-    module.ll_float64 = llvm.doubleTypeInContext(module.ll_context)
-    module.ll_cstring = llvm.pointerType(module.ll_char, 0)
-    module.ll_pointer = llvm.pointerType(module.ll_int8, 0)
-    # (c: ContextRef; elementTypes: ptr TypeRef; elementCount: cuint; packed: Bool): TypeRef
-    var nim_string_elements = [
-      module.ll_int,
-      module.ll_int,
-      module.ll_cstring]
-    module.ll_nim_string = llvm.structTypeInContext(
-      module.ll_context,
-      addr nim_string_elements[0],
-      cuint len nim_string_elements,
-      Bool false)
-
-  block:
-    var args_memcpy32 = [
-      module.ll_pointer, # dst
-      module.ll_pointer, # src
-      module.ll_int32, # len
-      module.ll_logic_bool] # isvolatile
-    module.ll_memcpy32 = llvm.functionType(
-      returnType = module.ll_void,
-      paramTypes = addr args_memcpy32[0],
-      paramCount = cuint len args_memcpy32,
-      isVarArg = Bool 0)
-    var args_memcpy64 = [
-      module.ll_pointer, # dst
-      module.ll_pointer, # src
-      module.ll_int64, # len
-      module.ll_logic_bool] # isvolatile
-    module.ll_memcpy64 = llvm.functionType(
-      returnType = module.ll_void,
-      paramTypes = addr args_memcpy64[0],
-      paramCount = cuint len args_memcpy64,
-      isVarArg = Bool 0)
-    var args_memset32 = [
-      module.ll_pointer, # dest
-      module.ll_int8, # val
-      module.ll_int32, # len
-      module.ll_logic_bool] # isvolatile
-    module.ll_memset32 = llvm.functionType(
-      returnType = module.ll_void,
-      paramTypes = addr args_memset32[0],
-      paramCount = cuint len args_memset32,
-      isVarArg = Bool 0)
-    var args_memset64 = [
-      module.ll_pointer, # dest
-      module.ll_int8, # val
-      module.ll_int64, # len
-      module.ll_logic_bool] # isvolatile
-    module.ll_memset64 = llvm.functionType(
-      returnType = module.ll_void,
-      paramTypes = addr args_memset64[0],
-      paramCount = cuint len args_memset64,
-      isVarArg = Bool 0)
-
-  block:
     template get_attr(name, val): AttributeRef =
       let kind_id = llvm.getEnumAttributeKindForName(name, csize len name)
       llvm.createEnumAttribute(module.ll_context, kind_id, val)
@@ -296,10 +350,11 @@ proc setup_codegen(module: var BModule) =
     module.ll_sret = get_attr("sret", 0)
     module.ll_byval = get_attr("byval", 0)
     module.ll_zeroext = get_attr("zeroext", 0)
+    module.ll_signext = get_attr("signext", 0)
 
 # end setup_codegen
 
-proc setup_module(module: BModule) =
+proc setup_init_proc(module: BModule) =
   module.init_proc = llvm.addFunction(
     module.ll_module,
     module.module_sym.name.s & "_module_main",
@@ -327,7 +382,8 @@ proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): 
   result.value_cache = init_table[int, ValueRef]()
   result.file_name = AbsoluteFile toFullPath(config, FileIndex module_sym.position)
   setup_codegen(result)
-  setup_module(result)
+  cache_types(result)
+  setup_init_proc(result)
   module_list.modules.add(result)
 
 proc gen_main_module*(module: BModule) =

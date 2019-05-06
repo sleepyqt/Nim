@@ -67,20 +67,6 @@ proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
     call_memset(module, adr, 0, int64 size)
   else: discard
 
-proc i8_to_i1(module: BModule; value: ValueRef): ValueRef =
-  assert value != nil
-  if llvm.getValueKind(value) == InstructionValueKind:
-    # eleminate common zext trunc combo
-    if llvm.getInstructionOpcode(value) == llvm.ZExt:
-      result = llvm.getOperand(value, 0)
-      if llvm.getFirstUse(value) == nil:
-        llvm.instructionEraseFromParent(value)
-      return
-  result = llvm.buildTrunc(module.ll_builder, value, module.ll_logic_bool, "")
-
-proc i1_to_i8(module: BModule; value: ValueRef): ValueRef =
-  result = llvm.buildZExt(module.ll_builder, value, module.ll_bool, "")
-
 proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed: bool): ValueRef =
   let src_type = llvm.typeOf(value)
 

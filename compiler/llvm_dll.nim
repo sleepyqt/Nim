@@ -383,6 +383,12 @@ var setModuleDataLayout*: proc(m: ModuleRef; dl: TargetDataRef) {.dll.}
 var setTarget*: proc(m: ModuleRef; triple: cstring) {.dll.}
 var createTargetDataLayout*: proc(t: TargetMachineRef): TargetDataRef {.dll.}
 
+var countStructElementTypes*: proc(structTy: TypeRef): cuint {.dll.}
+var getStructElementTypes*: proc(structTy: TypeRef; dest: ptr TypeRef) {.dll.}
+var structGetTypeAtIndex*: proc(structTy: TypeRef; i: cuint): TypeRef {.dll.}
+var isPackedStruct*: proc(structTy: TypeRef): Bool {.dll.}
+var isOpaqueStruct*: proc(structTy: TypeRef): Bool {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -644,6 +650,12 @@ proc ll_load_dll*: bool =
     get_proc(lib, setModuleDataLayout, "LLVMSetModuleDataLayout")
     get_proc(lib, setTarget, "LLVMSetTarget")
     get_proc(lib, createTargetDataLayout, "LLVMCreateTargetDataLayout")
+
+    get_proc(lib, countStructElementTypes, "LLVMCountStructElementTypes")
+    get_proc(lib, getStructElementTypes, "LLVMGetStructElementTypes")
+    get_proc(lib, structGetTypeAtIndex, "LLVMStructGetTypeAtIndex")
+    get_proc(lib, isPackedStruct, "LLVMIsPackedStruct")
+    get_proc(lib, isOpaqueStruct, "LLVMIsOpaqueStruct")
 
 # ------------------------------------------------------------------------------
 

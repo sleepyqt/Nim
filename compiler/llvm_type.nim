@@ -1,9 +1,11 @@
 import ast, types
-import llvm_data, llvm_abi
+import llvm_data
 import llvm_dll as llvm
 from sighashes import hashType
 
 proc get_type*(module: BModule; typ: PType): TypeRef
+
+import llvm_abi
 
 # Array Type -------------------------------------------------------------------
 
@@ -17,17 +19,8 @@ proc get_array_type(module: BModule; typ: PType): TypeRef =
     module.add_type(sig, result)
 
 proc get_openarray_type(module: BModule; typ: PType): TypeRef =
-  let sig = hashType(typ)
-  result = module.get_type(sig)
-  if result == nil:
-    let name = "openArray"
-    result = llvm.structCreateNamed(module.ll_context, name)
-    var fields = [
-      llvm.pointerType(get_type(module, typ.elemType), 0),
-      module.ll_int]
-    llvm.structSetBody(result, addr fields[0], cuint fields.len, 0)
+  result = get_type(module, typ.elemType)
 
-    module.add_type(sig, result)
 
 proc get_seq_type(module: BModule; typ: PType): TypeRef =
   let sig = hashType(typ)
@@ -134,6 +127,7 @@ proc get_proc_param_type*(module: BModule; typ: PType): TypeRef =
   else:
     result = get_type(module, typ)
 
+#[
 proc get_proc_type*(module: BModule; typ: PType): TypeRef =
   var params = newSeq[TypeRef]()
 
@@ -148,17 +142,17 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
     return_type = module.ll_void
   else:
     case abi_classify_return(module, abi, typ[0], state):
-    of ParamClass.Direct:
+    of ArgClass.Direct:
       return_type = get_proc_param_type(module, typ[0])
-    of ParamClass.Indirect:
+    of ArgClass.Indirect:
       return_type = module.ll_void
       params.add llvm.pointerType(get_proc_param_type(module, typ[0]), 0)
-    of ParamClass.Extend:
+    of ArgClass.Extend:
       return_type = get_proc_param_type(module, typ[0])
-    of ParamClass.Coerce1:
+    of ArgClass.Coerce1:
       var coerced = abi_coerce1(module, abi, typ[0])
       return_type = coerced
-    of ParamClass.Coerce2:
+    of ArgClass.Coerce2:
       var coerced = abi_coerce2(module, abi, typ[0])
       return_type = llvm.structTypeInContext(module.ll_context, addr coerced[0], cuint 2, Bool false)
 
@@ -166,19 +160,76 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
   for param in typ.n.sons[1 .. ^1]:
     if isCompileTimeOnly(param.typ): continue
     case abi_classify(module, abi, param.typ, state):
-    of ParamClass.Direct:
+    of ArgClass.Direct:
       params.add get_proc_param_type(module, param.typ)
-    of ParamClass.Indirect:
+    of ArgClass.Indirect:
       params.add llvm.pointerType(get_proc_param_type(module, param.typ), 0)
-    of ParamClass.Extend:
+    of ArgClass.Extend:
       params.add get_proc_param_type(module, param.typ)
-    of ParamClass.Coerce1:
+    of ArgClass.Coerce1:
       let coerced = abi_coerce1(module, abi, param.typ)
       params.add coerced
-    of ParamClass.Coerce2:
+    of ArgClass.Coerce2:
       let coerced = abi_coerce2(module, abi, param.typ)
       params.add coerced[0]
       params.add coerced[1]
+
+  assert return_type != nil
+
+  result = llvm.functionType(
+    returnType = return_type,
+    paramTypes = if params.len == 0: nil else: addr(params[0]),
+    paramCount = cuint(params.len),
+    isVarArg = if tfVarargs in typ.flags: Bool(1) else: Bool(0))
+]#
+
+proc get_proc_type*(module: BModule; typ: PType): TypeRef =
+  var params = newSeq[TypeRef]()
+
+  var abi = get_abi(module)
+
+  # return type
+  var return_type: TypeRef = nil
+
+  if typ[0] == nil:
+    return_type = module.ll_void
+  else:
+    let return_type_info = abi.classify_return_type(module, typ[0])
+
+    case return_type_info.class:
+
+    of ArgClass.Direct:
+      return_type = get_proc_param_type(module, typ[0])
+
+    of ArgClass.Indirect:
+      return_type = module.ll_void
+      params.add type_to_ptr get_proc_param_type(module, typ[0])
+
+    of ArgClass.Expand:
+      let ll_type = get_proc_param_type(module, typ[0])
+      var expanded = expand_struct_to_words(module, typ[0])
+      return_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool false)
+
+  # formal parameters types
+  for param in typ.n.sons[1 .. ^1]:
+    if isCompileTimeOnly(param.typ): continue
+    let param_type_info = abi.classify_argument_type(module, param.typ)
+
+    case param_type_info.class:
+
+    of ArgClass.Direct:
+      params.add get_proc_param_type(module, param.typ)
+
+    of ArgClass.Indirect:
+      params.add type_to_ptr get_proc_param_type(module, param.typ)
+
+    of ArgClass.Expand:
+      if ExpandToWords in param_type_info.flags:
+        let expanded = expand_struct_to_words(module, param.typ)
+        for field in expanded: params.add field
+      else:
+        let expanded = expand_struct(module, get_proc_param_type(module, param.typ))
+        for field in expanded: params.add field
 
   assert return_type != nil
 
