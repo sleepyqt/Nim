@@ -68,6 +68,7 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
       of ArgClass.Direct:
         ret_addr = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
         module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
+        gen_default_init(module, ret_type, ret_addr)
 
         if ArgFlag.Sext in ret_info.flags: llvm.addAttributeAtIndex(proc_val, AttributeIndex 0, module.ll_signext)
         if ArgFlag.Zext in ret_info.flags: llvm.addAttributeAtIndex(proc_val, AttributeIndex 0, module.ll_zeroext)
@@ -77,6 +78,8 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
         llvm.set_value_name(ret_addr, "result")
         module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
 
+        gen_default_init(module, ret_type, ret_addr)
+
         llvm.addAttributeAtIndex(proc_val, AttributeIndex 1, module.ll_sret)
 
         inc ir_param_index
@@ -84,6 +87,14 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
       of ArgClass.Expand:
         ret_addr = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
         module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
+
+        gen_default_init(module, ret_type, ret_addr)
+
+      of ArgClass.Ignore:
+        discard
+
+      of ArgClass.OpenArray:
+        discard
 
     # - - - - -  geberate formal parameters - - - - -
 
@@ -144,6 +155,22 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
 
             inc ir_param_index
 
+      of ArgClass.Ignore:
+        discard
+
+      of ArgClass.OpenArray:
+        var struct_fields = [get_proc_param_type(module, ast_param.typ), module.ll_int]
+        let ll_type = llvm.structTypeInContext(module.ll_context, addr struct_fields[0], 2, Bool 0)
+        let local_adr = insert_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
+        module.add_value(ast_param.sym.id, local_adr)
+        let adr_field_data = struct_field_ptr(module, local_adr, constant(module, 0i32))
+        let adr_field_lengt = struct_field_ptr(module, local_adr, constant(module, 1i32))
+        let param_data = llvm.getParam(proc_val, cuint ir_param_index + 0)
+        let param_length = llvm.getParam(proc_val, cuint ir_param_index + 1)
+        discard llvm.buildStore(module.ll_builder, param_data, adr_field_data)
+        discard llvm.buildStore(module.ll_builder, param_length, adr_field_lengt)
+        inc ir_param_index, 2
+
       inc ast_param_index
     # end for
 
@@ -178,6 +205,12 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
           discard llvm.buildRet(module.ll_builder, value)
         else:
           assert false
+
+      of ArgClass.Ignore:
+        discard
+
+      of ArgClass.OpenArray:
+        discard
 
     module.close_scope()
 
@@ -229,6 +262,12 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
     of ArgClass.Expand:
       result = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "call.tmp")
 
+    of ArgClass.Ignore:
+      discard
+
+    of ArgClass.OpenArray:
+      discard
+
     # end case
 
   # *** call arguments ***
@@ -239,31 +278,32 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
     let arg_type  = ast_arg.typ
     let arg_info  = abi.classify_argument_type(module, arg_type)
 
+    # handle openarray
+    if arg_type.kind in {tyArray}:
+      let param_type = proc_sym.typ.n.sons[ast_arg_index].typ
+      if param_type.kind in {tyOpenArray, tyVarargs}:
+        # convert array[T] -> openArray[T]
+
+        # get pointer to array first element. *T
+        var indices = [constant(module, 0i32), constant(module, 0i32)]
+        let data_ptr = llvm.buildGEP(module.ll_builder, arg_value, addr indices[0], 2, "")
+
+        args.add data_ptr
+        args.add constant_int(module, int lengthOrd(module.module_list.config, arg_type))
+
+        inc ast_arg_index
+        continue
+
     case arg_info.class
 
     of ArgClass.Direct:
-      if arg_type.kind in {tyBool}:
+      case arg_type.kind:
+      of tyBool:
         args.add llvm.buildTrunc(module.ll_builder, arg_value, module.ll_logic_bool, "call_bool_trunc")
       else:
         args.add arg_value
 
     of ArgClass.Indirect:
-    #[if arg_type.kind in {tyArray}:
-        let param_type = proc_sym.typ.n.sons[ast_arg_index].typ
-
-        if param_type.kind in {tyOpenArray}:
-          # convert array[T] -> openArray[T]
-
-          # get pointer to array first element. *T
-          var indices = [constant(module, 0i32), constant(module, 0i32)]
-          let data_ptr = llvm.buildGEP(module.ll_builder, arg_value, addr indices[0], 2, "")
-
-          args.add data_ptr
-          args.add constant(module, int lengthOrd(module.module_list.config, arg_type))
-
-          inc ast_arg_index
-          continue]#
-
       let ll_arg_type = get_proc_param_type(module, arg_type)
       let arg_copy    = insert_entry_alloca(module, ll_arg_type, "arg_copy")
       gen_copy(module, arg_copy, arg_value, arg_type)
@@ -284,6 +324,12 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
           args.add llvm.buildLoad(module.ll_builder, adr, "")
       else:
         var expanded = expand_struct(module, ll_arg_type)
+
+    of ArgClass.Ignore:
+      discard
+
+    of ArgClass.OpenArray:
+      discard
 
     # end case
 
@@ -317,6 +363,13 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
           discard llvm.buildStore(module.ll_builder, val, adr)
       else:
         assert false
+
+    of ArgClass.Ignore:
+      discard
+
+    of ArgClass.OpenArray:
+      discard
+
     # end case
 
 # ------------------------------------------------------------------------------

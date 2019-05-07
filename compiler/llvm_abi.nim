@@ -14,6 +14,10 @@ type ArgClass* = enum
   # object or tuple expandend into consecutive arguments
   Expand
 
+  Ignore
+
+  OpenArray
+
 type ArgFlag* = enum
   ByVal, InReg, Sext, Zext, ExpandToWords
 
@@ -103,6 +107,9 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
     result.class = Direct
     result.flags.incl Zext
 
+  of tyOpenArray, tyVarargs:
+    result.class = OpenArray
+
   else:
     assert false
 
@@ -121,6 +128,9 @@ method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType):
   of tyBool:
     result.class = Direct
     result.flags.incl Zext
+
+  of tyOpenArray, tyVarargs:
+    result.class = OpenArray
 
   else:
     assert false

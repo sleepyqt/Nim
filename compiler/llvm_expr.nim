@@ -8,6 +8,7 @@ proc gen_stmt*(module: BModule; node: PNode)
 proc gen_expr*(module: BModule; node: PNode): ValueRef
 proc gen_expr_lvalue*(module: BModule; node: PNode): ValueRef
 proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType)
+proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef)
 
 import llvm_proc
 
@@ -42,7 +43,7 @@ proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
     echo "gen_copy lhs: ", lhs, ", rhs: ", rhs
     assert(false)
 
-proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
+proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef) =
   assert typ != nil
   assert alloca != nil
   case typ.kind:

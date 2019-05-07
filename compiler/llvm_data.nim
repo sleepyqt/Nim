@@ -112,6 +112,18 @@ proc constant*(module: BModule; value: int32): ValueRef =
 proc constant*(module: BModule; value: int64): ValueRef =
   result = llvm.constInt(module.ll_int64, culonglong value, Bool 1)
 
+proc constant*(module: BModule; value: uint8): ValueRef =
+  result = llvm.constInt(module.ll_int8, culonglong value, Bool 0)
+
+proc constant*(module: BModule; value: uint16): ValueRef =
+  result = llvm.constInt(module.ll_int16, culonglong value, Bool 0)
+
+proc constant*(module: BModule; value: uint32): ValueRef =
+  result = llvm.constInt(module.ll_int32, culonglong value, Bool 0)
+
+proc constant*(module: BModule; value: uint64): ValueRef =
+  result = llvm.constInt(module.ll_int64, culonglong value, Bool 0)
+
 proc constant_int*(module: BModule; value: int64): ValueRef =
   case module.module_list.config.target.intSize:
   of 8: result = constant(module, int64 value)

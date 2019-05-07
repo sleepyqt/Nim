@@ -19,8 +19,7 @@ proc get_array_type(module: BModule; typ: PType): TypeRef =
     module.add_type(sig, result)
 
 proc get_openarray_type(module: BModule; typ: PType): TypeRef =
-  result = get_type(module, typ.elemType)
-
+  result = type_to_ptr get_type(module, typ.elemType)
 
 proc get_seq_type(module: BModule; typ: PType): TypeRef =
   let sig = hashType(typ)
@@ -127,62 +126,6 @@ proc get_proc_param_type*(module: BModule; typ: PType): TypeRef =
   else:
     result = get_type(module, typ)
 
-#[
-proc get_proc_type*(module: BModule; typ: PType): TypeRef =
-  var params = newSeq[TypeRef]()
-
-  let abi = module.abi
-
-  var state = abi_init_func_state(module, abi)
-
-  # return type
-  var return_type: TypeRef = nil
-
-  if typ[0] == nil:
-    return_type = module.ll_void
-  else:
-    case abi_classify_return(module, abi, typ[0], state):
-    of ArgClass.Direct:
-      return_type = get_proc_param_type(module, typ[0])
-    of ArgClass.Indirect:
-      return_type = module.ll_void
-      params.add llvm.pointerType(get_proc_param_type(module, typ[0]), 0)
-    of ArgClass.Extend:
-      return_type = get_proc_param_type(module, typ[0])
-    of ArgClass.Coerce1:
-      var coerced = abi_coerce1(module, abi, typ[0])
-      return_type = coerced
-    of ArgClass.Coerce2:
-      var coerced = abi_coerce2(module, abi, typ[0])
-      return_type = llvm.structTypeInContext(module.ll_context, addr coerced[0], cuint 2, Bool false)
-
-  # formal parameters types
-  for param in typ.n.sons[1 .. ^1]:
-    if isCompileTimeOnly(param.typ): continue
-    case abi_classify(module, abi, param.typ, state):
-    of ArgClass.Direct:
-      params.add get_proc_param_type(module, param.typ)
-    of ArgClass.Indirect:
-      params.add llvm.pointerType(get_proc_param_type(module, param.typ), 0)
-    of ArgClass.Extend:
-      params.add get_proc_param_type(module, param.typ)
-    of ArgClass.Coerce1:
-      let coerced = abi_coerce1(module, abi, param.typ)
-      params.add coerced
-    of ArgClass.Coerce2:
-      let coerced = abi_coerce2(module, abi, param.typ)
-      params.add coerced[0]
-      params.add coerced[1]
-
-  assert return_type != nil
-
-  result = llvm.functionType(
-    returnType = return_type,
-    paramTypes = if params.len == 0: nil else: addr(params[0]),
-    paramCount = cuint(params.len),
-    isVarArg = if tfVarargs in typ.flags: Bool(1) else: Bool(0))
-]#
-
 proc get_proc_type*(module: BModule; typ: PType): TypeRef =
   var params = newSeq[TypeRef]()
 
@@ -210,6 +153,12 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
       var expanded = expand_struct_to_words(module, typ[0])
       return_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool false)
 
+    of ArgClass.Ignore:
+      discard
+
+    of ArgClass.OpenArray:
+      discard
+
   # formal parameters types
   for param in typ.n.sons[1 .. ^1]:
     if isCompileTimeOnly(param.typ): continue
@@ -230,6 +179,13 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
       else:
         let expanded = expand_struct(module, get_proc_param_type(module, param.typ))
         for field in expanded: params.add field
+
+    of ArgClass.Ignore:
+      discard
+
+    of ArgClass.OpenArray:
+      params.add get_proc_param_type(module, param.typ) # ptr T
+      params.add module.ll_int # length
 
   assert return_type != nil
 
