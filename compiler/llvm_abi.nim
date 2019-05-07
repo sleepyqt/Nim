@@ -97,10 +97,16 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
     result.class = Expand
     result.flags.incl ExpandToWords
 
-  of tyInt .. tyInt64, tyUint .. tyUInt64, tyFloat32, tyFloat64, tyFloat:
+  of tyInt .. tyInt64, tyUint .. tyUInt64:
     result.class = Direct
 
-  of tyCString, tyPtr, tyPointer:
+  of tyFloat32, tyFloat64, tyFloat:
+    result.class = Direct
+
+  of tyChar:
+    result.class = Direct
+
+  of tyCString, tyPtr, tyPointer, tyVar:
     result.class = Direct
 
   of tyBool:
@@ -122,7 +128,16 @@ method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType):
   of tyObject, tyTuple:
     result.class = Indirect
 
-  of tyInt .. tyInt64, tyUint .. tyUInt64, tyFloat32, tyFloat64, tyFloat:
+  of tyInt .. tyInt64, tyUint .. tyUInt64:
+    result.class = Direct
+
+  of tyFloat32, tyFloat64, tyFloat:
+    result.class = Direct
+
+  of tyChar:
+    result.class = Direct
+
+  of tyCString, tyPtr, tyPointer, tyVar:
     result.class = Direct
 
   of tyBool:

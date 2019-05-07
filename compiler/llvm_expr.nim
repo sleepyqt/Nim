@@ -48,21 +48,16 @@ proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef) =
   assert alloca != nil
   case typ.kind:
   of tyInt, tyUint:
-    let val = llvm.constInt(module.ll_int, culonglong 0, Bool 0)
-    discard llvm.buildStore(module.ll_builder, val, alloca)
-  of tyInt8, tyUint8, tyBool:
-    let val = llvm.constInt(module.ll_int8, culonglong 0, Bool 0)
-    discard llvm.buildStore(module.ll_builder, val, alloca)
+    discard llvm.buildStore(module.ll_builder, constant_int(module, int8 0), alloca)
+  of tyInt8, tyUint8, tyBool, tyChar:
+    discard llvm.buildStore(module.ll_builder, constant(module, int8 0), alloca)
   of tyInt16, tyUint16:
-    let val = llvm.constInt(module.ll_int16, culonglong 0, Bool 0)
-    discard llvm.buildStore(module.ll_builder, val, alloca)
+    discard llvm.buildStore(module.ll_builder, constant(module, int16 0), alloca)
   of tyInt32, tyUint32:
-    let val = llvm.constInt(module.ll_int32, culonglong 0, Bool 0)
-    discard llvm.buildStore(module.ll_builder, val, alloca)
+    discard llvm.buildStore(module.ll_builder, constant(module, int32 0), alloca)
   of tyInt64, tyUInt64:
-    let val = llvm.constInt(module.ll_int64, culonglong 0, Bool 0)
-    discard llvm.buildStore(module.ll_builder, val, alloca)
-  of tyObject, tyArray:
+    discard llvm.buildStore(module.ll_builder, constant(module, int64 0), alloca)
+  of tyObject, tyTuple, tyArray:
     let adr = llvm.buildBitCast(module.ll_builder, alloca, module.ll_pointer, "")
     let size = get_type_size(module, typ)
     call_memset(module, adr, 0, int64 size)
@@ -169,6 +164,20 @@ proc gen_str_lit(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
+proc fix_literal(module: BModule; node: PNode; lhs, rhs: ValueRef): (ValueRef, ValueRef) =
+  # literals sometimes getting wrong types...
+
+  result[0] = lhs
+  result[1] = rhs
+
+  if node[2].kind in {nkIntLit}:
+    result[1] = convert_scalar(module, rhs, llvm.typeOf(lhs), is_signed_type(node[1].typ))
+    echo "fixed literal: ", node.kind, " - ", node[1].kind
+
+  if node[1].kind in {nkIntLit}:
+    result[0] = convert_scalar(module, lhs, llvm.typeOf(rhs), is_signed_type(node[2].typ))
+    echo "fixed literal: ", node.kind, " - ", node[2].kind
+
 proc gen_logic_or_and(module: BModule; node: PNode; op: TMagic): ValueRef =
   let incoming_bb = llvm.getInsertBlock(module.ll_builder)
   let fun = llvm.getBasicBlockParent(incoming_bb)
@@ -214,15 +223,17 @@ proc gen_magic_echo(module: BModule; node: PNode) =
 
 proc gen_magic_inc(module: BModule; node: PNode) =
   let adr = gen_expr_lvalue(module, node[1])
-  let increment = gen_expr(module, node[2])
-  let value = llvm.buildLoad(module.ll_builder, adr, "")
+  let xincrement = gen_expr(module, node[2])
+  let xvalue = llvm.buildLoad(module.ll_builder, adr, "")
+  let (value, increment) = fix_literal(module, node, xvalue, xincrement)
   let new_value = llvm.buildAdd(module.ll_builder, value, increment, "inc")
   discard llvm.buildStore(module.ll_builder, new_value, adr)
 
 proc gen_magic_dec(module: BModule; node: PNode) =
   let adr = gen_expr_lvalue(module, node[1])
-  let increment = gen_expr(module, node[2])
-  let value = llvm.buildLoad(module.ll_builder, adr, "")
+  let xincrement = gen_expr(module, node[2])
+  let xvalue = llvm.buildLoad(module.ll_builder, adr, "")
+  let (value, increment) = fix_literal(module, node, xvalue, xincrement)
   let new_value = llvm.buildSub(module.ll_builder, value, increment, "dec")
   discard llvm.buildStore(module.ll_builder, new_value, adr)
 
@@ -249,15 +260,15 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
     result = prc(module.ll_builder, lhs, "")
 
   proc binary(prc: BinaryProc): ValueRef =
-    let lhs = gen_expr(module, node[1])
-    let rhs = gen_expr(module, node[2])
-    assert lhs != nil
-    assert rhs != nil
+    let xlhs = gen_expr(module, node[1])
+    let xrhs = gen_expr(module, node[2])
+    let (lhs, rhs) = fix_literal(module, node, xlhs, xrhs)
     result = prc(module.ll_builder, lhs, rhs, "")
 
   proc cmp_int(pred: IntPredicate): ValueRef =
-    let lhs = gen_expr(module, node[1])
-    let rhs = gen_expr(module, node[2])
+    let xlhs = gen_expr(module, node[1])
+    let xrhs = gen_expr(module, node[2])
+    let (lhs, rhs) = fix_literal(module, node, xlhs, xrhs)
     result = llvm.buildICmp(module.ll_builder, pred, lhs, rhs, "")
     result = i1_to_i8(module, result)
 
