@@ -52,12 +52,15 @@ method classify_argument_type*(abi: GenericAbi; module: BModule; typ: PType): Ar
   of tyInt .. tyInt64, tyUint .. tyUInt64, tyFloat32, tyFloat64, tyFloat:
     result.class = Direct
 
-  of tyCString, tyPtr, tyPointer:
+  of tyCString, tyPtr, tyPointer, tyVar:
     result.class = Direct
 
   of tyBool:
     result.class = Direct
     result.flags.incl Zext
+
+  of tyOpenArray, tyVarargs:
+    result.class = OpenArray
 
   else:
     assert false
@@ -106,7 +109,7 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
   of tyChar:
     result.class = Direct
 
-  of tyCString, tyPtr, tyPointer, tyVar:
+  of tyCString, tyPtr, tyPointer, tyVar, tyRef:
     result.class = Direct
 
   of tyBool:
@@ -117,7 +120,7 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
     result.class = OpenArray
 
   else:
-    assert false
+    module.ice("classify_argument_type: " & $typ.kind)
 
 method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
@@ -137,7 +140,7 @@ method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType):
   of tyChar:
     result.class = Direct
 
-  of tyCString, tyPtr, tyPointer, tyVar:
+  of tyCString, tyPtr, tyPointer, tyVar, tyRef:
     result.class = Direct
 
   of tyBool:
@@ -201,7 +204,6 @@ type X86Abi* = ref object of BaseAbi
 
 proc x86_can_expand(struct: PType): bool =
   result = true
-  # todo: expand if contains int of size 4 or 8
 
 method classify_argument_type*(abi: X86Abi; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
@@ -215,11 +217,17 @@ method classify_argument_type*(abi: X86Abi; module: BModule; typ: PType): ArgInf
     else:
       result.class = ArgClass.Indirect
 
-  of tyInt .. tyInt64, tyUint .. tyUInt64, tyFloat32, tyFloat64, tyFloat:
+  of tyInt .. tyInt64, tyUint .. tyUInt64:
+    result.class = ArgClass.Direct
+
+  of tyFloat32, tyFloat64, tyFloat:
     result.class = ArgClass.Direct
 
   of tyPtr, tyPointer, tyVar, tyCString:
     result.class = ArgClass.Direct
+
+  of tyOpenArray, tyVarargs:
+    result.class = OpenArray
 
   else:
     assert false

@@ -2,12 +2,22 @@ import ast, types
 import llvm_data
 import llvm_dll as llvm
 from sighashes import hashType
+from magicsys import getCompilerProc
+from astalgo import debug
 
 proc get_type*(module: BModule; typ: PType): TypeRef
 
 import llvm_abi
 
 # Array Type -------------------------------------------------------------------
+
+proc get_generic_seq_type(module: BModule): TypeRef =
+  result = module.ll_generic_seq
+  if result == nil:
+    let sym = getCompilerProc(module.module_list.graph, "TGenericSeq")
+    if sym == nil: module.ice("TGenericSeq missing")
+    module.ll_generic_seq = get_type(module, sym.typ)
+    result = module.ll_generic_seq
 
 proc get_array_type(module: BModule; typ: PType): TypeRef =
   let sig = hashType(typ)
@@ -25,12 +35,33 @@ proc get_seq_type(module: BModule; typ: PType): TypeRef =
   let sig = hashType(typ)
   result = module.get_type(sig)
   if result == nil:
-    let name = typ.sym.name.s
-    result = llvm.structCreateNamed(module.ll_context, name)
-    # todo
+    #let name = typ.sym.name.s
+    debug typ
+    result = llvm.structCreateNamed(module.ll_context, "seq")
+
+    let header = get_generic_seq_type(module)
+    let elem_type = llvm.arrayType(get_type(module, elemType(typ)), 0)
+
+    var fields = [ header, elem_type ]
+
+    llvm.structSetBody(result, addr fields[0], cuint fields.len, 0)
+
     module.add_type(sig, result)
 
+proc get_unchecked_array_type(module: BModule; typ: PType): TypeRef =
+  let elem_type = get_type(module, elemType(typ))
+  let elem_count = cuint 0
+  result = llvm.arrayType(elem_type, elem_count)
+
 # Object Type ------------------------------------------------------------------
+
+proc get_nim_type(module: BModule): TypeRef =
+  result = module.ll_nim_type
+  if result == nil:
+    let sym = getCompilerProc(module.module_list.graph, "TNimType")
+    if sym == nil: module.ice("TNimType missing")
+    module.ll_nim_type = get_type(module, sym.typ)
+    result = module.ll_nim_type
 
 proc rec_list_size_align(module: BModule; node: PNode): tuple[size, align: BiggestInt] =
   case node.kind:
@@ -68,15 +99,14 @@ proc gen_object_fields(module: BModule; fields: var seq[TypeRef]; node: PNode) =
         max_size = max(max_size, size)
         max_align = max(max_align, align)
     echo "gen_object_fields: case size: ", max_size, " align: ", max_align
-    let elem_count =
-      cuint (max_size div max_align)
     let elem_type =
       if max_align == 1: module.ll_int8
       elif max_align == 2: module.ll_int16
       elif max_align == 4: module.ll_int32
       elif max_align == 8: module.ll_int64
       else: module.ll_void
-    fields.add llvm.arrayType(elem_type, elem_count)
+    if max_align != 0 and max_size != 0:
+      fields.add llvm.arrayType(elem_type, cuint (max_size div max_align))
   else:
     discard
 
@@ -90,13 +120,25 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
 
     let size = get_type_size(module, typ)
     let align = get_type_align(module, typ)
+    let super = if typ.sons.len == 0: nil else: typ[0]
 
     echo "+------------------------------------------------------+"
     echo " gen_object_type: ", name
     echo "+------------------------------------------------------+"
     echo " size: ", size, ", align: ", align
+    echo " final: ", isFinal(typ), ", pure: ", isPureObject(typ)
+
+    #debug typ
 
     var fields: seq[TypeRef]
+    if super == nil:
+      if (typ.sym != nil and sfPure in typ.sym.flags) or (tfFinal in typ.flags):
+        discard
+      else:
+        fields.add type_to_ptr get_nim_type(module)
+    else:
+      fields.add get_object_type(module, super)
+
     gen_object_fields(module, fields, typ.n)
     let fields_ptr = if fields.len == 0: nil else: addr fields[0]
     llvm.structSetBody(result, fields_ptr, cuint fields.len, 0)
@@ -116,7 +158,12 @@ proc get_cstring_type*(module: BModule; typ: PType): TypeRef =
   module.ll_cstring
 
 proc get_nim_string_type*(module: BModule; typ: PType): TypeRef =
-  module.ll_nim_string
+  result = module.ll_nim_string
+  if result == nil:
+    let sym = getCompilerProc(module.module_list.graph, "NimStringDesc")
+    if sym == nil: module.ice("NimStringDesc missing")
+    module.ll_nim_string = type_to_ptr get_type(module, sym.typ)
+    result = module.ll_nim_string
 
 # Procedure Types --------------------------------------------------------------
 
@@ -243,7 +290,7 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyObject: result = get_object_type(module, typ)
   of tyTuple: result = get_object_type(module, typ)
   of tyPointer, tyNil: result = module.ll_pointer
-  of tyProc: result = get_proc_type(module, typ)
+  of tyProc: result = type_to_ptr get_proc_type(module, typ)
   of tyRange: result = get_range_type(module, typ)
   of tyArray: result = get_array_type(module, typ)
   of tyEnum: result = get_enum_type(module, typ)
@@ -252,12 +299,13 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyPtr, tyRef: result = get_ptr_type(module, typ)
   of tyVar: result = llvm.pointerType(get_type(module, elemType(typ)), 0)
   of tyChar: result = module.ll_char
-  of tyString: result = module.ll_nim_string
+  of tyString: result = get_nim_string_type(module, typ)
   of tySequence: result = get_seq_type(module, typ)
   of tyDistinct: result = get_type(module, typ.lastSon)
-  of tyOpenArray: result = get_openarray_type(module, typ)
+  of tyOpenArray, tyVarargs: result = get_openarray_type(module, typ)
+  of tyUncheckedArray: result = get_unchecked_array_type(module, typ)
   else: echo "get_type: unknown type kind: ", typ.kind
-  if result == nil:
-    echo "get_type fail: ", typ.kind
-  #echo ">>>>> mapped type: ", typ.kind, " ----> ", llvm.getTypeKind(result)
+
+  if result == nil: echo "get_type fail: ", typ.kind
+  echo ">>>>> mapped type: ", typ.kind, " ----> ", llvm.getTypeKind(result)
 

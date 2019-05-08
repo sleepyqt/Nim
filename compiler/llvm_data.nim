@@ -39,6 +39,8 @@ type
     ll_float32*, ll_float64*: TypeRef
     ll_cstring*, ll_nim_string*: TypeRef
     ll_pointer*: TypeRef
+    ll_generic_seq*: TypeRef
+    ll_nim_type*: TypeRef
     # what the ...
     ll_int24*, ll_int40*, ll_int48*, ll_int56*: TypeRef
     # intrisics
@@ -287,8 +289,9 @@ proc cache_types(module: BModule) =
 
   # nim string
 
-  var nim_string_elements = [module.ll_int, module.ll_int, module.ll_cstring]
-  module.ll_nim_string = llvm.structTypeInContext(module.ll_context, addr nim_string_elements[0], cuint len nim_string_elements, Bool false)
+  module.ll_nim_string = nil
+  module.ll_generic_seq = nil
+  module.ll_nim_type = nil
 
   # intrisics
 

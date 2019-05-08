@@ -6,7 +6,7 @@ import llvm_dll as llvm
 import llvm_data, llvm_type, llvm_expr, llvm_abi
 
 proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
-  let proc_type = getType(module, sym.typ)
+  let proc_type = get_proc_type(module, sym.typ)
   let proc_name = sym.name.s
   result = llvm.addFunction(module.ll_module, proc_name, proc_type)
   module.add_value(sym.id, result)
@@ -34,7 +34,7 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
     # save current bb for nested procs
     let incoming_bb = llvm.getInsertBlock(module.ll_builder)
 
-    let proc_type  = getType(module, sym.typ)
+    let proc_type  = get_proc_type(module, sym.typ)
     let proc_name  = mangle_name(module, sym)
     let proc_val   = llvm.addFunction(module.ll_module, proc_name, proc_type)
     let ret_type   = getReturnType(sym)

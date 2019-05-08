@@ -1,5 +1,5 @@
 import ast, types
-import llvm_data, llvm_type
+import llvm_data, llvm_type, llvm_aux
 import llvm_dll as llvm
 
 import astalgo
@@ -114,11 +114,7 @@ proc gen_object_lit(module: BModule; node: PNode): ValueRef =
   result = alloca
   for i in 1 ..< node.len:
     let field = node[i]
-    let index = get_field_index(module, node.typ, field[0].sym)
-    var indices = [
-      llvm.constInt(module.ll_int32, culonglong 0, Bool 0),
-      llvm.constInt(module.ll_int32, culonglong index, Bool 0)]
-    let lhs = llvm.buildGEP(module.ll_builder, alloca, addr indices[0], cuint len indices, "")
+    let lhs = gen_field_access(module, node.typ, alloca, field[0].sym)
     let rhs = gen_expr(module, field[1])
     gen_copy(module, lhs, rhs, field[0].typ)
 
@@ -776,74 +772,13 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
-# type O1 = object
-#   x: int32
-#   y: int32
-
-# type O2 = object
-#   x: int32
-#   y: int32
-#   case z: int8
-#   of 1:
-#     a, b, c: int8
-#   of 2:
-#     d, e, f: int8
-#   else:
-#     discard
-#   w: int16
-
-type PathNode = object
-  index: int
-  node: PNode
-
-proc find(module: BModule; field: PSym; node: PNode; path: var seq[PathNode]): bool =
-  # find a field index inside object
-  case node.kind:
-  of nkRecList:
-    path.add PathNode(index: 0, node: node)
-    for item in node:
-      if find(module, field, item, path):
-        return true
-      else:
-        inc path[^1].index
-    path.del(path.high)
-  of nkRecCase:
-    if node[0].sym.id == field.id:
-      return true
-    inc path[^1].index
-    for item in node.sons[1 .. ^1]:
-      if item.kind in {nkOfBranch, nkElse}:
-        if find(module, field, item.lastSon, path):
-          return true
-  of nkSym:
-    if node.sym.id == field.id:
-      return true
-  else:
-    discard
-
 proc gen_dot_expr_lvalue(module: BModule; node: PNode): ValueRef =
-  # node[0].node[1]
-
-  var path: seq[PathNode]
-  discard find(module, node[1].sym, node[0].typ.n, path)
-
-  assert path.len > 0
-
   let lhs = gen_expr_lvalue(module, node[0])
-  var indices = [
-      constant(module, 0i32),
-      constant(module, path[0].index.int32)]
-  result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "")
 
-  # case objects require multiple GEPs
-  for i in 1 .. path.high:
-    let brach_type = llvm.pointerType(get_object_case_branch_type(module, path[i].node), 0)
+  let field = node[1].sym
+  let object_type = node[0].typ
 
-    var indices = [
-      constant(module, 0i32),
-      constant(module, path[i].index.int32)]
-    let adr = llvm.buildBitCast(module.ll_builder, result, brach_type, "")
-    result = llvm.buildGEP(module.ll_builder, adr, addr indices[0], cuint len indices, "")
+  result = gen_field_access(module, object_type, lhs, field)
 
 proc gen_dot_expr(module: BModule; node: PNode): ValueRef =
   let adr = gen_dot_expr_lvalue(module, node)
@@ -1107,10 +1042,11 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkPragmaBlock:
     discard
   of nkProcDef, nkFuncDef, nkMethodDef, nkConverterDef:
-    if node.sons[genericParamsPos].kind == nkEmpty:
-      let sym = node.sons[namePos].sym
-      if sfCompileTime notin sym.flags:
-        discard gen_proc(module, sym)
+    when true:
+      if node.sons[genericParamsPos].kind == nkEmpty:
+        let sym = node.sons[namePos].sym
+        if sfCompileTime notin sym.flags:
+          discard gen_proc(module, sym)
     discard
   of nkParForStmt:
     discard
