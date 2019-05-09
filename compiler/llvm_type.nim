@@ -11,7 +11,7 @@ import llvm_abi
 
 # Array Type -------------------------------------------------------------------
 
-proc get_generic_seq_type(module: BModule): TypeRef =
+proc get_generic_seq_type*(module: BModule): TypeRef =
   result = module.ll_generic_seq
   if result == nil:
     let sym = getCompilerProc(module.module_list.graph, "TGenericSeq")
@@ -157,7 +157,7 @@ proc get_object_case_branch_type*(module: BModule; node: PNode): TypeRef =
 proc get_cstring_type*(module: BModule; typ: PType): TypeRef =
   module.ll_cstring
 
-proc get_nim_string_type*(module: BModule; typ: PType): TypeRef =
+proc get_nim_string_type*(module: BModule): TypeRef =
   result = module.ll_nim_string
   if result == nil:
     let sym = getCompilerProc(module.module_list.graph, "NimStringDesc")
@@ -299,7 +299,7 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyPtr, tyRef: result = get_ptr_type(module, typ)
   of tyVar: result = llvm.pointerType(get_type(module, elemType(typ)), 0)
   of tyChar: result = module.ll_char
-  of tyString: result = get_nim_string_type(module, typ)
+  of tyString: result = get_nim_string_type(module)
   of tySequence: result = get_seq_type(module, typ)
   of tyDistinct: result = get_type(module, typ.lastSon)
   of tyOpenArray, tyVarargs: result = get_openarray_type(module, typ)

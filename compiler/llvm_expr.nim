@@ -34,11 +34,11 @@ proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
   of tyBool, tyChar, tyEnum, tyRange:
     discard llvm.buildStore(module.ll_builder, rhs, lhs)
   of tyString:
-    assert false
+    discard llvm.buildStore(module.ll_builder, rhs, lhs)
   of tyRef:
-    assert false
+    discard llvm.buildStore(module.ll_builder, rhs, lhs)
   of tySequence:
-    assert false
+    discard llvm.buildStore(module.ll_builder, rhs, lhs)
   else:
     echo "gen_copy lhs: ", lhs, ", rhs: ", rhs
     assert(false)
@@ -147,14 +147,28 @@ proc gen_set_lit(module: BModule; node: PNode): ValueRef =
 
 proc gen_str_lit(module: BModule; node: PNode): ValueRef =
   if node.typ.kind == tyCString:
-    let str = llvm.constStringInContext(module.ll_context, node.strVal, cuint len node.strVal, Bool 0)
     let typ = llvm.arrayType(module.ll_char, cuint len(node.strVal) + 1)
+
+    let initializer = llvm.constStringInContext(module.ll_context, node.strVal, cuint len node.strVal, Bool 0)
     let global = llvm.addGlobal(module.ll_module, typ, "literal.cstring")
-    llvm.setInitializer(global, str)
+    llvm.setInitializer(global, initializer)
+
     var indices = [constant(module, 0i32), constant(module, 0i32)]
     result = llvm.buildGEP(module.ll_builder, global, addr indices[0], cuint len indices, "")
   elif node.typ.kind == tyString:
-    discard
+    let header_type = get_generic_seq_type(module)
+    # todo: flags in cap field
+    var header_values = [ constant_int(module, node.strVal.len), constant_int(module, node.strVal.len) ]
+    let header = llvm.constStructInContext(module.ll_context, addr header_values[0], 2, Bool 0)
+
+    let str = llvm.constStringInContext(module.ll_context, node.strVal, cuint len node.strVal, Bool 0)
+    var nim_str_fields = [ header, str ]
+
+    let initializer = llvm.constStructInContext(module.ll_context, addr nim_str_fields[0], 2, Bool 0)
+    let global = llvm.addGlobal(module.ll_module, llvm.typeOf(initializer), "literal.string")
+    llvm.setInitializer(global, initializer)
+
+    result = llvm.buildBitCast(module.ll_builder, global, get_nim_string_type(module), "")
   else:
     assert false
 
