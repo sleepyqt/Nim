@@ -1,11 +1,11 @@
 import std / dynlib
 
 when defined(linux):
-  const llvm_dll = "libLLVM-7.0.0.so"
+  const llvm_dlls = [ "libLLVM-7.0.0.so", "libLLVM-8.0.0.so" ]
   {.pragma: dll, cdecl.}
 
 when defined(windows):
-  const llvm_dll = "LLVM-7.0.0.dll"
+  const llvm_dlls = [ "LLVM-7.0.0.dll", "LLVM-8.0.0.dll" ]
   {.pragma: dll, stdcall.}
 
 # ------------------------------------------------------------------------------
@@ -396,10 +396,14 @@ template get_proc(lib: typed; fun: pointer; name: typed): typed =
   if fun == nil: echo "load fail: ", name
 
 proc ll_load_dll*: bool =
-  let lib = loadLib(llvm_dll)
+  var lib: LibHandle
+
+  for dll in llvm_dlls:
+    lib = loadLib(dll)
+    if lib != nil: break
 
   if lib == nil:
-    echo "can't load LLVM dll :("
+    echo "can't load LLVM dll :( :: ", llvm_dlls
 
   result = lib != nil
   if result:

@@ -259,12 +259,13 @@ proc get_range_type(module: BModule; typ: PType): TypeRef =
   result = get_type(module, typ[0])
 
 proc get_set_type(module: BModule; typ: PType): TypeRef =
-  case int(getSize(module.module_list.config, typ)):
+  let size = int(getSize(module.module_list.config, typ))
+  case size:
   of 1: result = module.ll_int8
   of 2: result = module.ll_int16
   of 4: result = module.ll_int32
   of 8: result = module.ll_int64
-  else: assert(false, "unsupported yet")
+  else: result = llvm.arrayType(module.ll_int8, cuint size)
 
 # ------------------------------------------------------------------------------
 

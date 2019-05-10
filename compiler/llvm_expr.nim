@@ -20,14 +20,16 @@ proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
   assert typ != nil
   echo "gen_copy typ: ", typ.kind
   case typ.kind:
-  of tyObject, tyArray, tyTuple, tyOpenArray:
+  of tyObject, tyArray, tyTuple:
     ensure_type_kind(lhs, PointerTypeKind)
     ensure_type_kind(rhs, PointerTypeKind)
     let dst = llvm.buildBitCast(module.ll_builder, lhs, module.ll_pointer, "")
     let src = llvm.buildBitCast(module.ll_builder, rhs, module.ll_pointer, "")
     let size = get_type_size(module, typ)
     call_memcpy(module, dst, src, size)
-  of tyInt .. tyInt64, tyFloat .. tyFloat128, tyUInt .. tyUInt64:
+  of tyInt .. tyInt64, tyUInt .. tyUInt64:
+    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+  of tyFloat, tyFloat32, tyFloat64:
     discard llvm.buildStore(module.ll_builder, rhs, lhs)
   of tyPtr, tyPointer, tyCString:
     discard llvm.buildStore(module.ll_builder, rhs, lhs)
@@ -39,6 +41,15 @@ proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
     discard llvm.buildStore(module.ll_builder, rhs, lhs)
   of tySequence:
     discard llvm.buildStore(module.ll_builder, rhs, lhs)
+  of tySet:
+    let size = get_type_size(module, typ)
+    case size:
+    of 1, 2, 4, 8:
+      discard llvm.buildStore(module.ll_builder, rhs, lhs)
+    else:
+      let dst = llvm.buildBitCast(module.ll_builder, lhs, module.ll_pointer, "")
+      let src = llvm.buildBitCast(module.ll_builder, rhs, module.ll_pointer, "")
+      call_memcpy(module, dst, src, size)
   else:
     echo "gen_copy lhs: ", lhs, ", rhs: ", rhs
     assert(false)
@@ -61,6 +72,16 @@ proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef) =
     let adr = llvm.buildBitCast(module.ll_builder, alloca, module.ll_pointer, "")
     let size = get_type_size(module, typ)
     call_memset(module, adr, 0, int64 size)
+  of tySet:
+    let size = get_type_size(module, typ)
+    case size:
+    of 1: discard llvm.buildStore(module.ll_builder, constant(module, int8 0), alloca)
+    of 2: discard llvm.buildStore(module.ll_builder, constant(module, int16 0), alloca)
+    of 4: discard llvm.buildStore(module.ll_builder, constant(module, int32 0), alloca)
+    of 8: discard llvm.buildStore(module.ll_builder, constant(module, int64 0), alloca)
+    else:
+      let adr = llvm.buildBitCast(module.ll_builder, alloca, module.ll_pointer, "")
+      call_memset(module, adr, 0, int64 size)
   else: discard
 
 proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed: bool): ValueRef =
@@ -142,8 +163,36 @@ proc gen_array_lit(module: BModule; node: PNode): ValueRef =
     let rhs = gen_expr(module, item)
     gen_copy(module, lhs, rhs, item.typ)
 
-proc gen_set_lit(module: BModule; node: PNode): ValueRef =
+proc gen_int_set_lit(module: BModule; node: PNode; size: int): ValueRef =
+  let ll_type = get_type(module, node.typ)
+  let accum = insert_entry_alloca(module, ll_type, "curly.accum")
+  gen_default_init(module, node.typ, accum)
+
+  for item in node:
+    if item.kind == nkRange:
+      discard
+    else:
+      # accum = accum or (1 shl value)
+      let value = gen_expr(module, item)
+      let one = llvm.constInt(ll_type, culonglong 1, Bool 0)
+      let bit = llvm.buildShl(module.ll_builder, one, value, "curly.bit")
+      let accum_value = llvm.buildLoad(module.ll_builder, accum, "curly.accum.load")
+      let merged = llvm.buildOr(module.ll_builder, accum_value, bit, "curly.merged")
+      discard llvm.buildStore(module.ll_builder, merged, accum)
+
+  result = llvm.buildLoad(module.ll_builder, accum, "curly.load")
+
+proc gen_array_set_lit(module: BModule; node: PNode; size: int): ValueRef =
   discard
+
+proc gen_set_lit(module: BModule; node: PNode): ValueRef =
+  echo "gen_set_lit:"
+  let size = int get_type_size(module, node.typ)
+
+  if size <= 8:
+    result = gen_int_set_lit(module, node, size)
+  else:
+    result = gen_array_set_lit(module, node, size)
 
 proc gen_str_lit(module: BModule; node: PNode): ValueRef =
   if node.typ.kind == tyCString:
@@ -259,6 +308,30 @@ proc gen_magic_length(module: BModule; node: PNode): ValueRef =
     ensure_type_kind(len_field, PointerTypeKind)
     result = llvm.buildLoad(module.ll_builder, len_field, "magic.openarray.len")
     ensure_type_kind(result, IntegerTypeKind)
+  else:
+    assert false
+
+proc gen_magic_in_set(module: BModule; node: PNode): ValueRef =
+  let set_type = node[1].typ
+  let set_size = get_type_size(module, set_type)
+  let val_type = node[2].typ
+  let ll_val_type = get_type(module, val_type)
+
+  assert node[1] != nil
+  assert node[2] != nil
+
+  echo "ll_val_type = ", ll_val_type
+
+  if set_size <= 8:
+    # result = if (set_value and (1 shl value)) != 0
+    let set_value = gen_expr(module, node[1])
+    let value = gen_expr(module, node[2])
+    let one = llvm.constInt(ll_val_type, 1, Bool 0)
+    let zero = llvm.constInt(ll_val_type, 0, Bool 0)
+    let bit = llvm.buildShl(module.ll_builder, one, value, "inset.bit")
+    let merged = llvm.buildAnd(module.ll_builder, set_value, bit, "inset.merged")
+    let r_bool =  llvm.buildICmp(module.ll_builder, IntNE, merged, zero, "inset.r_bool")
+    result = i1_to_i8(module, r_bool)
   else:
     assert false
 
@@ -429,6 +502,8 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mDec: gen_magic_dec(module, node)
   of mLengthOpenArray: result = gen_magic_length(module, node)
   #of mOrd: discard
+  # sets
+  of mInSet: result = gen_magic_in_set(module, node)
   else: echo "unknown magic: ", op
 
 # Procedure Types --------------------------------------------------------------
@@ -750,39 +825,39 @@ proc gen_sym_const(module: BModule; sym: PSym): ValueRef =
 
 proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
   echo "gen_sym_expr_lvalue kind: ", node.sym.kind
+
   case node.sym.kind:
   of skVar, skForVar, skLet, skResult, skParam:
     result = module.get_value(node.sym.id)
   of skConst:
     result = gen_sym_const(module, node.sym)
-  else: echo "gen_sym_expr_lvalue: ", node.sym.kind
+  else:
+    echo "fail gen_sym_expr_lvalue: ", node.sym.kind
 
   assert result != nil
   ensure_type_kind(result, PointerTypeKind)
 
 proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
+  echo "gen_sym_expr kind: ", node.kind, " sym.kind: ", node.sym.kind
+
   case node.sym.kind:
-  of skMethod:
-    discard
   of skProc, skConverter, skIterator, skFunc:
-    if sfCompileTime in node.sym.flags:
-      assert(false)
+    if sfCompileTime in node.sym.flags: module.ice("attempt to generate code for compile time proc")
     result = gen_proc(module, node.sym)
-    assert result != nil
   of skConst:
     result = gen_sym_const(module, node.sym)
-  of skEnumField:
-    discard
   of skVar, skForVar, skResult, skLet, skParam:
     let alloca = gen_sym_expr_lvalue(module, node)
     case node.sym.typ.kind:
-    of tyObject, tyArray, tyTuple, tyOpenArray:
+    of tyObject, tyArray, tyTuple:
       result = alloca
     else:
       result = llvm.buildLoad(module.ll_builder, alloca, "gen_sym_expr.deref")
-  of skTemp:
-    discard
-  else: echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
+  # of skMethod: discard
+  # of skEnumField: discard
+  # of skTemp: discard
+  else:
+    echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
 
 # ------------------------------------------------------------------------------
 
@@ -1056,7 +1131,7 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkPragmaBlock:
     discard
   of nkProcDef, nkFuncDef, nkMethodDef, nkConverterDef:
-    when true:
+    when false:
       if node.sons[genericParamsPos].kind == nkEmpty:
         let sym = node.sons[namePos].sym
         if sfCompileTime notin sym.flags:

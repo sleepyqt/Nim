@@ -30,7 +30,7 @@ proc myProcess(pass: PPassContext, node: PNode): PNode =
   result = node
   var module = BModule(pass)
 
-  if module.module_sym.name.s == "hello": # todo skip for debugging
+  if true or module.module_sym.name.s == "hello": # todo skip for debugging
     if not skipCodegen(module.module_list.config, node):
       let new_node = transformStmt(module.module_list.graph, module.module_sym, node)
       gen_stmt(module, new_node)

@@ -119,6 +119,17 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
   of tyOpenArray, tyVarargs:
     result.class = OpenArray
 
+  of tySet:
+    let size = get_type_size(module, typ)
+    case size:
+    of 1, 2, 4, 8:
+      result.class = Direct
+    else:
+      result.class = Indirect
+
+  of tyProc:
+    result.class = Direct
+
   else:
     module.ice("classify_argument_type: " & $typ.kind)
 
@@ -150,8 +161,11 @@ method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType):
   of tyOpenArray, tyVarargs:
     result.class = OpenArray
 
+  of tyProc:
+    result.class = Direct
+
   else:
-    assert false
+    module.ice("classify_return_type: " & $typ.kind)
 
 # ------------------------------------------------------------------------------
 
