@@ -1,7 +1,7 @@
-from modulegraphs import PPassContext, ModuleGraph
 import ast, types
+from modulegraphs import PPassContext, ModuleGraph, SigHash, hash, `==`, `$`
 from options import ConfigRef
-from sighashes import SigHash, hash, `==`, hashProc, hashNonProc, `$`
+from sighashes import hashProc, hashNonProc
 from msgs import toFullPath, internalError
 from lineinfos import FileIndex
 from pathutils import AbsoluteFile
