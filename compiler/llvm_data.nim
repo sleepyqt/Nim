@@ -6,6 +6,8 @@ from msgs import toFullPath, internalError
 from lineinfos import FileIndex
 from pathutils import AbsoluteFile
 from platform import TSystemCPU, TSystemOS, Target
+from astalgo import getModule
+
 import tables
 import llvm_dll as llvm
 
@@ -56,9 +58,11 @@ type
     ll_machine*: TargetMachineRef
     # attributes
     ll_sret*, ll_byval*, ll_zeroext*, ll_signext*: AttributeRef
+    sig_collisions*: CountTable[SigHash]
 
   BModuleList* = ref object of RootObj
     modules*: seq[BModule]
+    closed_modules*: seq[BModule]
     graph*: ModuleGraph
     config*: ConfigRef
     sig_collisions*: CountTable[SigHash]
@@ -331,10 +335,11 @@ proc setup_codegen(module: BModule) =
   block:
     var triple: string
     var cpu: cstring
+    var reloc: RelocMode
 
     case config.target.targetCPU:
     of cpuI386:  cpu = "i686"
-    of cpuAMD64: cpu = "i686"
+    of cpuAMD64: cpu = "x86-64"
     else: assert(false, "unsupported CPU")
 
     triple = select_target_triple(config.target)
@@ -350,7 +355,7 @@ proc setup_codegen(module: BModule) =
       echo "getTargetFromTriple error: ", err
       llvm.disposeMessage(err)
     var opt_level = llvm.CodeGenLevelNone
-    var reloc = llvm.RelocDefault
+    reloc = RelocPIC#llvm.RelocDefault
     var model = llvm.CodeModelDefault
     module.ll_machine = llvm.createTargetMachine(target, triple, cpu, features, opt_level, reloc, model)
     let layout = llvm.createTargetDataLayout(module.ll_machine)
@@ -396,10 +401,19 @@ proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): 
   result.type_cache = init_table[SigHash, TypeRef]()
   result.value_cache = init_table[int, ValueRef]()
   result.file_name = AbsoluteFile toFullPath(config, FileIndex module_sym.position)
+  result.sig_collisions = initCountTable[SigHash]()
   setup_codegen(result)
   cache_types(result)
   setup_init_proc(result)
-  module_list.modules.add(result)
+
+  if module_sym.position >= module_list.modules.len:
+    set_len(module_list.modules, module_sym.position + 1)
+
+  module_list.modules[module_sym.position] = result
+
+proc find_module*(module: BModule; sym: PSym): BModule =
+  let module_sym = getModule(sym)
+  result = module.module_list.modules[module_sym.position]
 
 proc gen_main_module*(module: BModule) =
   # emit app entry point procedure
@@ -454,6 +468,20 @@ proc get_value*(module: BModule; id: int): ValueRef =
 proc mangle*(name: string): string =
   name # todo
 
+proc mangle_proc_name*(module: BModule; sym: PSym): string =
+  let sig = if sym.kind in routineKinds and sym.typ != nil:
+    hashProc(sym)
+  else:
+    hashNonProc(sym)
+
+  result.add mangle(sym.name.s)
+  result.add $sig
+
+  let counter = module.sig_collisions.getOrDefault(sig)
+  if counter != 0:
+    result.add "_" & $(counter + 1)
+  module.sig_collisions.inc(sig)
+#[
 proc mangle_name*(module: BModule; sym: PSym): string =
   let sig = if sym.kind in routineKinds and sym.typ != nil:
     hashProc(sym)
@@ -467,7 +495,7 @@ proc mangle_name*(module: BModule; sym: PSym): string =
   if counter != 0:
     result.add "_" & $(counter + 1)
   module.module_list.sig_collisions.inc(sig)
-
+]#
 proc mangle_local_name*(module: BModule; sym: PSym): string =
   mangle(sym.name.s)
 

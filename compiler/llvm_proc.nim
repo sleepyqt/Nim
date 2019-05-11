@@ -6,18 +6,25 @@ import llvm_dll as llvm
 import llvm_data, llvm_type, llvm_expr, llvm_abi
 
 proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
-  let proc_type = get_proc_type(module, sym.typ)
-  let proc_name = sym.name.s
-  result = llvm.addFunction(module.ll_module, proc_name, proc_type)
-  module.add_value(sym.id, result)
+  result = module.get_value(sym.id)
+  if result == nil:
+    let proc_type = get_proc_type(module, sym.typ)
+    let proc_name = sym.name.s
+    result = llvm.addFunction(module.ll_module, proc_name, proc_type)
+    module.add_value(sym.id, result)
 
 # ------------------------------------------------------------------------------
 
-proc gen_proc*(module: BModule; sym: PSym): ValueRef =
-  assert sym != nil
+proc gen_proc_prototype*(module: BModule; sym: PSym): ValueRef =
+  result = module.get_value(sym.id)
+  if result == nil:
+    let proc_type  = get_proc_type(module, sym.typ)
+    let proc_name  = mangle_proc_name(module, sym)
+    let proc_val   = llvm.addFunction(module.ll_module, proc_name, proc_type)
+    module.add_value(sym.id, proc_val)
+    result = proc_val
 
-  if (sfBorrow in sym.flags) or (sym.typ == nil):
-    return
+proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
   result = module.get_value(sym.id)
   if result == nil:
     echo "***********************************************************"
@@ -28,19 +35,19 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
     echo "* call conv: ", sym.typ.callConv
     echo "***********************************************************"
 
-    if sfImportc in sym.flags:
-      return gen_importc_proc(module, sym)
-
     # save current bb for nested procs
     let incoming_bb = llvm.getInsertBlock(module.ll_builder)
 
     let proc_type  = get_proc_type(module, sym.typ)
-    let proc_name  = mangle_name(module, sym)
+    let proc_name  = mangle_proc_name(module, sym)
     let proc_val   = llvm.addFunction(module.ll_module, proc_name, proc_type)
     let ret_type   = getReturnType(sym)
     let entry_bb   = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "entry")
     let return_bb  = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "return")
     var ret_addr: ValueRef # addres of *result* variable
+
+    llvm.setLinkage(proc_val, ExternalLinkage)
+    llvm.setVisibility(proc_val, DefaultVisibility)
 
     let abi = get_abi(module)
 
@@ -224,7 +231,15 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
     echo ""
     echo "******* end gen_proc: ", sym.name.s, " *******"
 
-  discard
+proc gen_proc*(module: BModule; sym: PSym): ValueRef =
+  if (sfBorrow in sym.flags) or (sym.typ == nil): return
+
+  if sfImportc in sym.flags:
+    result = gen_importc_proc(module, sym)
+  else:
+    let target = find_module(module, sym)
+    discard gen_proc_body(target, sym)
+    result = gen_proc_prototype(module, sym)
 
 # ------------------------------------------------------------------------------
 

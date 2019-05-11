@@ -36,7 +36,7 @@ proc get_seq_type(module: BModule; typ: PType): TypeRef =
   result = module.get_type(sig)
   if result == nil:
     #let name = typ.sym.name.s
-    debug typ
+    #debug typ
     result = llvm.structCreateNamed(module.ll_context, "seq")
 
     let header = get_generic_seq_type(module)
@@ -98,7 +98,7 @@ proc gen_object_fields(module: BModule; fields: var seq[TypeRef]; node: PNode) =
         let (size, align) = rec_list_size_align(module, branch.lastSon)
         max_size = max(max_size, size)
         max_align = max(max_align, align)
-    echo "gen_object_fields: case size: ", max_size, " align: ", max_align
+    #echo "gen_object_fields: case size: ", max_size, " align: ", max_align
     let elem_type =
       if max_align == 1: module.ll_int8
       elif max_align == 2: module.ll_int16
@@ -308,5 +308,5 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   else: echo "get_type: unknown type kind: ", typ.kind
 
   if result == nil: echo "get_type fail: ", typ.kind
-  echo ">>>>> mapped type: ", typ.kind, " ----> ", llvm.getTypeKind(result)
+  #echo ">>>>> mapped type: ", typ.kind, " ----> ", llvm.getTypeKind(result)
 

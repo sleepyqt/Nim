@@ -132,6 +132,33 @@ type
     MetadataAsValueValueKind, InlineAsmValueKind, InstructionValueKind
 
 type
+  Linkage* = enum
+    ExternalLinkage,          ## *< Externally visible function
+    AvailableExternallyLinkage, LinkOnceAnyLinkage, ## *< Keep one copy of function when linking (inline)
+    LinkOnceODRLinkage,       ## *< Same, but only replaced by something
+                       ##                             equivalent.
+    LinkOnceODRAutoHideLinkage, ## *< Obsolete
+    WeakAnyLinkage,           ## *< Keep one copy of function when linking (weak)
+    WeakODRLinkage,           ## *< Same, but only replaced by something
+                   ##                             equivalent.
+    AppendingLinkage,         ## *< Special purpose, only applies to global arrays
+    InternalLinkage,          ## *< Rename collisions when linking (static
+                    ##                                functions)
+    PrivateLinkage,           ## *< Like Internal, but omit from symbol table
+    DLLImportLinkage,         ## *< Obsolete
+    DLLExportLinkage,         ## *< Obsolete
+    ExternalWeakLinkage,      ## *< ExternalWeak linkage description
+    GhostLinkage,             ## *< Obsolete
+    CommonLinkage,            ## *< Tentative definitions
+    LinkerPrivateLinkage,     ## *< Like Private, but linker removes.
+    LinkerPrivateWeakLinkage  ## *< Like LinkerPrivate, but is weak.
+
+  Visibility* = enum
+    DefaultVisibility,        ## *< The GV is visible
+    HiddenVisibility,         ## *< The GV is hidden
+    ProtectedVisibility       ## *< The GV is protected
+
+type
   BinaryProc* = proc (b: BuilderRef; l, r: ValueRef; n: cstring): ValueRef {.dll.}
   UnaryProc* = proc(b: BuilderRef; v: ValueRef; name: cstring): ValueRef {.dll.}
 
@@ -388,6 +415,9 @@ var getStructElementTypes*: proc(structTy: TypeRef; dest: ptr TypeRef) {.dll.}
 var structGetTypeAtIndex*: proc(structTy: TypeRef; i: cuint): TypeRef {.dll.}
 var isPackedStruct*: proc(structTy: TypeRef): Bool {.dll.}
 var isOpaqueStruct*: proc(structTy: TypeRef): Bool {.dll.}
+
+var setLinkage*: proc(global: ValueRef; linkage: Linkage) {.dll.}
+var setVisibility*: proc(global: ValueRef; viz: Visibility) {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -660,6 +690,9 @@ proc ll_load_dll*: bool =
     get_proc(lib, structGetTypeAtIndex, "LLVMStructGetTypeAtIndex")
     get_proc(lib, isPackedStruct, "LLVMIsPackedStruct")
     get_proc(lib, isOpaqueStruct, "LLVMIsOpaqueStruct")
+
+    get_proc(lib, setLinkage, "LLVMSetLinkage")
+    get_proc(lib, setVisibility, "LLVMSetVisibility")
 
 # ------------------------------------------------------------------------------
 

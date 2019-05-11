@@ -864,6 +864,51 @@ proc hcrLinkTargetName(conf: ConfigRef, objFile: string, isMain = false): Absolu
                    else: platform.OS[conf.target.targetOS].dllFrmt % basename
   result = conf.getNimcacheDir / RelativeFile(targetName)
 
+proc callLinker*(conf: ConfigRef) =
+  var
+    linkCmd: string
+  if conf.globalOptions * {optCompileOnly, optGenScript} == {optCompileOnly}:
+    return # speed up that call if only compiling and no script shall be
+           # generated
+  #var c = cCompiler
+  #var script: Rope = nil
+  var cmds: TStringSeq = @[]
+  var prettyCmds: TStringSeq = @[]
+  let prettyCb = proc (idx: int) =
+    when declared(echo):
+      let cmd = prettyCmds[idx]
+      if cmd != "": echo cmd
+  #compileCFiles(conf, conf.toCompile, script, cmds, prettyCmds)
+  if optCompileOnly notin conf.globalOptions:
+    execCmdsInParallel(conf, cmds, prettyCb)
+  if optNoLinking notin conf.globalOptions:
+    # call the linker:
+    var objfiles = ""
+    for it in conf.externalToLink:
+      let objFile = if noAbsolutePaths(conf): it.extractFilename else: it
+      add(objfiles, ' ')
+      add(objfiles, quoteShell(
+          addFileExt(objFile, CC[conf.cCompiler].objExt)))
+
+    for x in conf.toCompile:
+      let objFile = if noAbsolutePaths(conf): x.obj.extractFilename else: x.obj.string
+      add(objfiles, ' ')
+      add(objfiles, quoteShell(objFile))
+    let mainOutput = if optGenScript notin conf.globalOptions: conf.prepareToWriteOutput
+                     else: AbsoluteFile(conf.projectName)
+    linkCmd = getLinkCmd(conf, mainOutput, objfiles)
+    if optCompileOnly notin conf.globalOptions:
+      const MaxCmdLen = when defined(windows): 8_000 else: 32_000
+      if linkCmd.len > MaxCmdLen:
+        # Windows's command line limit is about 8K (don't laugh...) so C compilers on
+        # Windows support a feature where the command line can be passed via ``@linkcmd``
+        # to them.
+        linkViaResponseFile(conf, linkCmd)
+      else:
+        execLinkCmd(conf, linkCmd)
+  else:
+    linkCmd = ""
+
 proc callCCompiler*(conf: ConfigRef) =
   var
     linkCmd: string

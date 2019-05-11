@@ -18,7 +18,7 @@ proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
   assert lhs != nil
   assert rhs != nil
   assert typ != nil
-  echo "gen_copy typ: ", typ.kind
+  #echo "gen_copy typ: ", typ.kind
   case typ.kind:
   of tyObject, tyArray, tyTuple:
     ensure_type_kind(lhs, PointerTypeKind)
@@ -51,7 +51,7 @@ proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
       let src = llvm.buildBitCast(module.ll_builder, rhs, module.ll_pointer, "")
       call_memcpy(module, dst, src, size)
   else:
-    echo "gen_copy lhs: ", lhs, ", rhs: ", rhs
+    #echo "gen_copy lhs: ", lhs, ", rhs: ", rhs
     assert(false)
 
 proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef) =
@@ -186,7 +186,7 @@ proc gen_array_set_lit(module: BModule; node: PNode; size: int): ValueRef =
   discard
 
 proc gen_set_lit(module: BModule; node: PNode): ValueRef =
-  echo "gen_set_lit:"
+  #echo "gen_set_lit:"
   let size = int get_type_size(module, node.typ)
 
   if size <= 8:
@@ -231,11 +231,11 @@ proc fix_literal(module: BModule; node: PNode; lhs, rhs: ValueRef): (ValueRef, V
 
   if node[2].kind in {nkIntLit}:
     result[1] = convert_scalar(module, rhs, llvm.typeOf(lhs), is_signed_type(node[1].typ))
-    echo "fixed literal: ", node.kind, " - ", node[1].kind
+    #echo "fixed literal: ", node.kind, " - ", node[1].kind
 
   if node[1].kind in {nkIntLit}:
     result[0] = convert_scalar(module, lhs, llvm.typeOf(rhs), is_signed_type(node[2].typ))
-    echo "fixed literal: ", node.kind, " - ", node[2].kind
+    #echo "fixed literal: ", node.kind, " - ", node[2].kind
 
 proc gen_logic_or_and(module: BModule; node: PNode; op: TMagic): ValueRef =
   let incoming_bb = llvm.getInsertBlock(module.ll_builder)
@@ -297,7 +297,7 @@ proc gen_magic_dec(module: BModule; node: PNode) =
   discard llvm.buildStore(module.ll_builder, new_value, adr)
 
 proc gen_magic_length(module: BModule; node: PNode): ValueRef =
-  echo "gen_magic_length"
+  #echo "gen_magic_length"
   let sym_node = if node[1].kind == nkHiddenDeref: node[1][0] else: node[1]
   #debug sym_node
   case sym_node.typ.kind:
@@ -320,7 +320,7 @@ proc gen_magic_in_set(module: BModule; node: PNode): ValueRef =
   assert node[1] != nil
   assert node[2] != nil
 
-  echo "ll_val_type = ", ll_val_type
+  #echo "ll_val_type = ", ll_val_type
 
   if set_size <= 8:
     # result = if (set_value and (1 shl value)) != 0
@@ -533,6 +533,10 @@ proc gen_single_var(module: BModule; node: PNode) =
     assert ll_type != nil
     let adr = llvm.addGlobal(module.ll_module, ll_type, name)
     llvm.setInitializer(adr, llvm.constNull(ll_type))
+
+    llvm.setLinkage(adr, ExternalLinkage)
+    llvm.setVisibility(adr, DefaultVisibility)
+
     # initialize global variable
     if node[2].kind == nkEmpty:
       gen_default_init(module, typ, adr)
@@ -824,7 +828,7 @@ proc gen_sym_const(module: BModule; sym: PSym): ValueRef =
       assert false
 
 proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
-  echo "gen_sym_expr_lvalue kind: ", node.sym.kind
+  #echo "gen_sym_expr_lvalue kind: ", node.sym.kind
 
   case node.sym.kind:
   of skVar, skForVar, skLet, skResult, skParam:
@@ -838,7 +842,7 @@ proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
   ensure_type_kind(result, PointerTypeKind)
 
 proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
-  echo "gen_sym_expr kind: ", node.kind, " sym.kind: ", node.sym.kind
+  #echo "gen_sym_expr kind: ", node.kind, " sym.kind: ", node.sym.kind
 
   case node.sym.kind:
   of skProc, skConverter, skIterator, skFunc:
@@ -888,8 +892,8 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
   let rhs = gen_expr(module, node[1])
   assert lhs != nil
   assert rhs != nil
-  echo "lhs ", lhs
-  echo "rhs ", rhs
+  #echo "lhs ", lhs
+  #echo "rhs ", rhs
   case node[0].typ.kind:
   of tyArray:
     var indices = [constant_int(module, 0), rhs]
@@ -941,10 +945,10 @@ proc gen_conv(module: BModule; node: PNode): ValueRef =
   let value = gen_expr(module, node[1])
   let ll_src_type = llvm.typeOf(value)
   let ll_dst_type = get_type(module, dst_type)
-  echo "gen_conv:"
-  echo "dst_type = ", dst_type.kind, " -> ", ll_dst_type
-  echo "scr_type = ", src_type.kind, " -> ", ll_src_type
-  echo "value = ", value
+  #echo "gen_conv:"
+  #echo "dst_type = ", dst_type.kind, " -> ", ll_dst_type
+  #echo "scr_type = ", src_type.kind, " -> ", ll_src_type
+  #echo "value = ", value
 
   const Integers   = {tyInt .. tyInt64}
   const Floats     = {tyFloat .. tyFloat128}
@@ -1009,7 +1013,7 @@ proc gen_check_range64(module: BModule; node: PNode): ValueRef =
 
 proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
   # L value, always pointer
-  echo "gen_expr_lvalue kind: ", node.kind
+  #echo "gen_expr_lvalue kind: ", node.kind
   case node.kind:
   of nkSym:
     result = gen_sym_expr_lvalue(module, node)
@@ -1027,7 +1031,7 @@ proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
 
 proc gen_expr*(module: BModule; node: PNode): ValueRef =
   # R value, can be pointer or value
-  echo "gen_expr kind: ", node.kind
+  #echo "gen_expr kind: ", node.kind
   case node.kind:
   of nkSym:
     result = gen_sym_expr(module, node)

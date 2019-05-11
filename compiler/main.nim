@@ -96,6 +96,8 @@ proc commandCompileToLL(graph: ModuleGraph) =
     llWriteModules(graph.backend, conf)
     llShutdown()
 
+    callLinker(conf)
+
 proc commandCompileToC(graph: ModuleGraph) =
   let conf = graph.config
 

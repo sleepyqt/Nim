@@ -1,11 +1,11 @@
 import ast, idents
-from options import ConfigRef, completeGeneratedFilePath, withPackageName
+from options import ConfigRef, completeGeneratedFilePath, withPackageName, CFile
 from passes import makePass, skipCodegen
 from transf import transformStmt
 from modulegraphs import PPassContext, ModuleGraph
 from platform import TSystemCPU
 from pathutils import changeFileExt, `$`
-
+from extccomp import addFileToCompile
 import llvm_data, llvm_expr
 import llvm_dll as llvm
 
@@ -23,8 +23,16 @@ proc myOpen(graph: ModuleGraph; module_sym: PSym): PPassContext =
   result = newModule(BModuleList(graph.backend), module_sym, graph.config)
 
 proc myClose(graph: ModuleGraph; pass: PPassContext, node: PNode): PNode =
-  echo "myClose"
   result = node
+
+  if pass != nil:
+    let module = BModule(pass)
+    echo "myClose ", module.module_sym.name.s
+    if not skipCodegen(module.module_list.config, node):
+      finish_module(module)
+      if sfMainModule in module.module_sym.flags:
+        gen_main_module(module)
+      module.module_list.closed_modules.add module
 
 proc myProcess(pass: PPassContext, node: PNode): PNode =
   result = node
@@ -69,14 +77,15 @@ proc llWriteModules*(backend: RootRef, config: ConfigRef) =
   when true:
     let mod_list = BModuleList(backend)
 
-    for module in mod_list.modules:
-      finish_module(module)
+    #for index, module in mod_list.modules:
+    #  echo "finishing module: ", index, " ", module == nil
+    #  finish_module(module)
 
-    for module in mod_list.modules:
-      if sfMainModule in module.module_sym.flags:
-        gen_main_module(module)
+    #for module in mod_list.modules:
+    #  if sfMainModule in module.module_sym.flags:
+    #    gen_main_module(module)
 
-    for module in mod_list.modules:
+    for module in mod_list.closed_modules:
 
       when false:
         let pm = llvm.createPassManager()
@@ -94,8 +103,11 @@ proc llWriteModules*(backend: RootRef, config: ConfigRef) =
       let o_file = changeFileExt(base_file_name, ".o")
       echo "writing module :: ", ll_file, " × ", bc_file, " x ", o_file
       let m = printModuleToString(module.ll_module)
-      echo m
+      #echo m
       disposeMessage(m)
+
+      let cf = CFile(obj: o_file)
+      addFileToCompile(config, cf)
 
       when true:
         var err0: cstring
@@ -105,10 +117,15 @@ proc llWriteModules*(backend: RootRef, config: ConfigRef) =
       when false:
         var res1 = llvm.writeBitcodeToFile(module.ll_module, cstring bc_file)
 
-      when false:
+      when true:
         var err1: cstring
         var fmt = llvm.ObjectFile
-        var res2 = llvm.targetMachineEmitToFile(module.ll_machine, cstring module.ll_module, o_file, fmt, addr err1)
+        var res2 = llvm.targetMachineEmitToFile(
+          t = module.ll_machine,
+          m = module.ll_module,
+          filename = cstring o_file,
+          codegen = fmt,
+          errorMessage = addr err1)
         llvm.disposeMessage(err1)
 
       echo "------------------------------------------------"
