@@ -204,6 +204,8 @@ proc gen_str_lit(module: BModule; node: PNode): ValueRef =
 
     var indices = [constant(module, 0i32), constant(module, 0i32)]
     result = llvm.buildGEP(module.ll_builder, global, addr indices[0], cuint len indices, "")
+    llvm.setGlobalConstant(global, Bool 1)
+    llvm.setLinkage(global, PrivateLinkage)
   elif node.typ.kind == tyString:
     let header_type = get_generic_seq_type(module)
     # todo: flags in cap field

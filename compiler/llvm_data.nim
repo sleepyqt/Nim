@@ -1,6 +1,5 @@
-import ast, types
+import ast, types, options
 from modulegraphs import PPassContext, ModuleGraph, SigHash, hash, `==`, `$`
-from options import ConfigRef
 from sighashes import hashProc, hashNonProc
 from msgs import toFullPath, internalError
 from lineinfos import FileIndex
@@ -234,6 +233,61 @@ proc newModuleList*(graph: ModuleGraph): BModuleList =
   result.config = graph.config
   result.sig_collisions = initCountTable[SigHash]()
 
+#[
+type TargetInfo = object
+  triple: string
+  cpu: string
+  reloc: RelocMode
+  abi: PlatformABI
+]#
+
+proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv =
+  let os = module.module_list.config.target.targetOS
+  let cpu = module.module_list.config.target.targetCPU
+
+  case cpu:
+  # ------------ i386 ------------
+  of cpuI386:
+    case os:
+    of osWindows:
+      case cc:
+      of ccDefault: result = X86StdcallCallConv
+      of ccStdCall: result = X86StdcallCallConv
+      of ccCDecl: result = CCallConv
+      else: assert false
+    of osLinux: assert false
+    of osStandalone: assert false
+    else: assert false
+  # ------------ AMD64 ------------
+  of cpuAmd64:
+    case os:
+    of osWindows:
+      case cc:
+      of ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = Win64CallConv
+      else: assert false
+    of osLinux:
+      case cc:
+      of ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = X8664SysVCallConv
+      else: assert false
+    of osStandalone:
+      case cc:
+      of ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = X8664SysVCallConv
+      else: assert false
+    else: assert false
+  # ------------  end ------------
+  else: assert false
+
+  #of ccDefault:
+  #of ccStdCall: X86StdcallCallConv
+  #of ccCDecl:
+  #of ccSafeCall:
+  #of ccSysCall:
+  #of ccInline:
+  #of ccNoInline:
+  #of ccFastCall:
+  #of ccClosure:
+  #of ccNoConvention:
+
 proc select_target_triple(target: Target): string =
   case target.targetCPU:
   of cpuI386:    result.add "i686-"
@@ -336,10 +390,17 @@ proc setup_codegen(module: BModule) =
     var triple: string
     var cpu: cstring
     var reloc: RelocMode
+    var features: string
 
     case config.target.targetCPU:
-    of cpuI386:  cpu = "i686"
-    of cpuAMD64: cpu = "x86-64"
+    of cpuI386:
+      cpu = "i686"
+      reloc = RelocDefault
+      features = ""
+    of cpuAMD64:
+      cpu = "x86-64"
+      reloc = RelocPIC
+      features = "+sse,+sse2"
     else: assert(false, "unsupported CPU")
 
     triple = select_target_triple(config.target)
@@ -350,12 +411,17 @@ proc setup_codegen(module: BModule) =
 
     var target: llvm.TargetRef = nil
     var err: cstring
-    var features: cstring = ""
     if llvm.getTargetFromTriple(triple, addr target, addr err) != 0:
       echo "getTargetFromTriple error: ", err
       llvm.disposeMessage(err)
-    var opt_level = llvm.CodeGenLevelNone
-    reloc = RelocPIC#llvm.RelocDefault
+    var opt_level =
+      if optOptimizeSpeed in config.options:
+        llvm.CodeGenLevelDefault
+      elif optOptimizeSize in config.options:
+        llvm.CodeGenLevelLess
+      else:
+        llvm.CodeGenLevelAggressive
+
     var model = llvm.CodeModelDefault
     module.ll_machine = llvm.createTargetMachine(target, triple, cpu, features, opt_level, reloc, model)
     let layout = llvm.createTargetDataLayout(module.ll_machine)
@@ -415,16 +481,38 @@ proc find_module*(module: BModule; sym: PSym): BModule =
   let module_sym = getModule(sym)
   result = module.module_list.modules[module_sym.position]
 
+proc get_main_proc(module: BModule): ValueRef =
+  let config = module.module_list.config
+
+  case config.target.targetOS:
+
+  of osWindows:
+    if optGenGuiApp in config.globalOptions:
+      result = llvm.addFunction(
+        module.ll_module, "WinMain", llvm.functionType(module.ll_int32, nil, 0, Bool 0))
+    else:
+      result = llvm.addFunction(
+        module.ll_module, "DllMain", llvm.functionType(module.ll_int32, nil, 0, Bool 0))
+
+  of osLinux:
+    result = llvm.addFunction(
+      module.ll_module, "main", llvm.functionType(module.ll_int32, nil, 0, Bool 0))
+
+  of osStandalone:
+    result = llvm.addFunction(
+      module.ll_module, "main", llvm.functionType(module.ll_int32, nil, 0, Bool 0))
+
+  else: assert false
+
 proc gen_main_module*(module: BModule) =
-  # emit app entry point procedure
-  let entry_point = llvm.addFunction(
-    module.ll_module,
-    "main",
-    llvm.functionType(module.ll_int32, nil, 0, Bool 0))
-  let entry_bb = llvm.appendBasicBlockInContext(module.ll_context, entry_point, "app_entry")
-  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-  discard llvm.buildCall(module.ll_builder, module.init_proc, nil, 0, "")
-  discard llvm.buildRet(module.ll_builder, llvm.constInt(module.ll_int32, culonglong 0, Bool 0))
+  let config = module.module_list.config
+
+  if optNoMain notin config.globalOptions:
+    let main_proc = get_main_proc(module)
+    let entry_bb = llvm.appendBasicBlockInContext(module.ll_context, main_proc, "app_entry")
+    llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+    discard llvm.buildCall(module.ll_builder, module.init_proc, nil, 0, "")
+    discard llvm.buildRet(module.ll_builder, llvm.constInt(module.ll_int32, culonglong 0, Bool 0))
 
 # Scope Stack ------------------------------------------------------------------
 

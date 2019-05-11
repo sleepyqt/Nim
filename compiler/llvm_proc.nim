@@ -11,6 +11,7 @@ proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
     let proc_type = get_proc_type(module, sym.typ)
     let proc_name = sym.name.s
     result = llvm.addFunction(module.ll_module, proc_name, proc_type)
+    llvm.setFunctionCallConv(result, cuint map_call_conv(module, sym.typ.callConv))
     module.add_value(sym.id, result)
 
 # ------------------------------------------------------------------------------
@@ -21,6 +22,7 @@ proc gen_proc_prototype*(module: BModule; sym: PSym): ValueRef =
     let proc_type  = get_proc_type(module, sym.typ)
     let proc_name  = mangle_proc_name(module, sym)
     let proc_val   = llvm.addFunction(module.ll_module, proc_name, proc_type)
+    llvm.setFunctionCallConv(proc_val, cuint map_call_conv(module, sym.typ.callConv))
     module.add_value(sym.id, proc_val)
     result = proc_val
 
@@ -45,6 +47,8 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
     let entry_bb   = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "entry")
     let return_bb  = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "return")
     var ret_addr: ValueRef # addres of *result* variable
+
+    llvm.setFunctionCallConv(proc_val, cuint map_call_conv(module, sym.typ.callConv))
 
     llvm.setLinkage(proc_val, ExternalLinkage)
     llvm.setVisibility(proc_val, DefaultVisibility)

@@ -192,7 +192,7 @@ method classify_argument_type*(abi: Amd64AbiWindows; module: BModule; typ: PType
     result.class = ArgClass.Direct
 
   else:
-    assert false
+    module.ice("classify_argument_type: " & $typ.kind)
 
 method classify_return_type*(abi: Amd64AbiWindows; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
@@ -210,7 +210,7 @@ method classify_return_type*(abi: Amd64AbiWindows; module: BModule; typ: PType):
     result.class = ArgClass.Direct
 
   else:
-    assert false
+    module.ice("classify_return_type: " & $typ.kind)
 
 # ------------------------------------------------------------------------------
 
@@ -237,14 +237,21 @@ method classify_argument_type*(abi: X86Abi; module: BModule; typ: PType): ArgInf
   of tyFloat32, tyFloat64, tyFloat:
     result.class = ArgClass.Direct
 
-  of tyPtr, tyPointer, tyVar, tyCString:
+  of tyPtr, tyPointer, tyVar, tyCString, tyRef, tyString:
     result.class = ArgClass.Direct
 
   of tyOpenArray, tyVarargs:
     result.class = OpenArray
 
+  of tyBool:
+    result.class = Direct
+    result.flags.incl Zext
+
+  of tyProc:
+    result.class = Direct
+
   else:
-    assert false
+    module.ice("classify_argument_type: " & $typ.kind)
 
 method classify_return_type*(abi: X86Abi; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
@@ -258,11 +265,18 @@ method classify_return_type*(abi: X86Abi; module: BModule; typ: PType): ArgInfo 
   of tyInt .. tyInt64, tyUint .. tyUInt64, tyFloat32, tyFloat64, tyFloat:
     result.class = ArgClass.Direct
 
-  of tyPtr, tyPointer, tyVar, tyCString:
-    result.class = ArgClass.Direct
+  of tyCString, tyPtr, tyPointer, tyVar, tyRef, tyString:
+    result.class = Direct
+
+  of tyBool:
+    result.class = Direct
+    result.flags.incl Zext
+
+  of tyProc:
+    result.class = Direct
 
   else:
-    assert false
+    module.ice("classify_return_type: " & $typ.kind)
 
 # ------------------------------------------------------------------------------
 

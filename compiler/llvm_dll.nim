@@ -159,6 +159,22 @@ type
     ProtectedVisibility       ## *< The GV is protected
 
 type
+  CallConv* = enum
+    CCallConv = 0, FastCallConv = 8, ColdCallConv = 9, GHCCallConv = 10, HiPECallConv = 11,
+    WebKitJSCallConv = 12, AnyRegCallConv = 13, PreserveMostCallConv = 14,
+    PreserveAllCallConv = 15, SwiftCallConv = 16, CXXFASTTLSCallConv = 17,
+    X86StdcallCallConv = 64, X86FastcallCallConv = 65, ARMAPCSCallConv = 66,
+    ARMAAPCSCallConv = 67, ARMAAPCSVFPCallConv = 68, MSP430INTRCallConv = 69,
+    X86ThisCallCallConv = 70, PTXKernelCallConv = 71, PTXDeviceCallConv = 72,
+    SPIRFUNCCallConv = 75, SPIRKERNELCallConv = 76, IntelOCLBICallConv = 77,
+    X8664SysVCallConv = 78, Win64CallConv = 79, X86VectorCallCallConv = 80,
+    HHVMCallConv = 81, HHVMCCallConv = 82, X86INTRCallConv = 83, AVRINTRCallConv = 84,
+    AVRSIGNALCallConv = 85, AVRBUILTINCallConv = 86, AMDGPUVSCallConv = 87,
+    AMDGPUGSCallConv = 88, AMDGPUPSCallConv = 89, AMDGPUCSCallConv = 90,
+    AMDGPUKERNELCallConv = 91, X86RegCallCallConv = 92, AMDGPUHSCallConv = 93,
+    MSP430BUILTINCallConv = 94, AMDGPULSCallConv = 95, AMDGPUESCallConv = 96
+
+type
   BinaryProc* = proc (b: BuilderRef; l, r: ValueRef; n: cstring): ValueRef {.dll.}
   UnaryProc* = proc(b: BuilderRef; v: ValueRef; name: cstring): ValueRef {.dll.}
 
@@ -418,6 +434,7 @@ var isOpaqueStruct*: proc(structTy: TypeRef): Bool {.dll.}
 
 var setLinkage*: proc(global: ValueRef; linkage: Linkage) {.dll.}
 var setVisibility*: proc(global: ValueRef; viz: Visibility) {.dll.}
+var setFunctionCallConv*: proc(fn: ValueRef; cc: cuint) {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -693,6 +710,7 @@ proc ll_load_dll*: bool =
 
     get_proc(lib, setLinkage, "LLVMSetLinkage")
     get_proc(lib, setVisibility, "LLVMSetVisibility")
+    get_proc(lib, setFunctionCallConv, "LLVMSetFunctionCallConv")
 
 # ------------------------------------------------------------------------------
 
