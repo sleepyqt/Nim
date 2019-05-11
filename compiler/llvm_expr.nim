@@ -1131,12 +1131,15 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkPragmaBlock:
     discard
   of nkProcDef, nkFuncDef, nkMethodDef, nkConverterDef:
-    when false:
-      if node.sons[genericParamsPos].kind == nkEmpty:
-        let sym = node.sons[namePos].sym
-        if sfCompileTime notin sym.flags:
-          discard gen_proc(module, sym)
-    discard
+    if node.sons[genericParamsPos].kind == nkEmpty:
+      let sym = node.sons[namePos].sym
+      if sfCompileTime notin sym.flags:
+        if sym.skipGenericOwner.kind == skModule and sfCompileTime notin sym.flags:
+          if ({sfExportc, sfCompilerProc} * sym.flags == {sfExportc}) or
+              (sfExportc in sym.flags and lfExportLib in sym.loc.flags) or
+              (sym.kind == skMethod):
+            if sym.getBody.kind != nkEmpty or lfDynamicLib in sym.loc.flags:
+              discard gen_proc(module, sym)
   of nkParForStmt:
     discard
   of nkState:
