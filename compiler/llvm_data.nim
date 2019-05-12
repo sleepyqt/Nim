@@ -165,5 +165,5 @@ proc mangle_name*(module: BModule; sym: PSym): string =
 proc mangle_local_name*(module: BModule; sym: PSym): string =
   mangle(sym.name.s)
 
-proc mangle_global_name*(module: BModule; sym: PSym): string =
+proc mangle_global_var_name*(module: BModule; sym: PSym): string =
   mangle(sym.name.s)

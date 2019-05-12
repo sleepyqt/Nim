@@ -216,7 +216,7 @@ proc mainCommand*(graph: ModuleGraph) =
   case conf.command.normalize
   of "ll":
     conf.cmd = cmdCompileToLL
-    defineSymbol(graph.config.symbols, "ll")
+    defineSymbol(graph.config.symbols, "LLVM")
     commandCompileToLL(graph)
   of "c", "cc", "compile", "compiletoc":
     # compile means compileToC currently

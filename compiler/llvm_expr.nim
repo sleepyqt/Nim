@@ -525,18 +525,28 @@ proc gen_asgn(module: BModule; node: PNode) =
   assert rhs != nil, $node[1].kind
   gen_copy(module, lhs, rhs, node[0].typ)
 
+proc gen_var_prototype(module: BModule; node: PNode): ValueRef =
+  let sym = node.sym
+  let typ = node.sym.typ
+  let ll_type = get_type(module, typ)
+  let name = mangle_global_var_name(module, sym)
+  let global = llvm.addGlobal(module.ll_module, ll_type, name)
+  llvm.setLinkage(global, ExternalLinkage)
+  result = global
+
 proc gen_single_var(module: BModule; node: PNode) =
 
+  let sym = node[0].sym
+
   proc gen_global =
-    let sym = node[0].sym
     let typ = node[0].sym.typ
     let ll_type = get_type(module, typ)
-    let name = mangle_global_name(module, sym)
+    let name = mangle_global_var_name(module, sym)
     assert ll_type != nil
     let adr = llvm.addGlobal(module.ll_module, ll_type, name)
     llvm.setInitializer(adr, llvm.constNull(ll_type))
 
-    llvm.setLinkage(adr, ExternalLinkage)
+    #llvm.setLinkage(adr, ExternalLinkage)
     llvm.setVisibility(adr, DefaultVisibility)
 
     # initialize global variable
@@ -550,7 +560,6 @@ proc gen_single_var(module: BModule; node: PNode) =
     module.add_value(sym.id, adr)
 
   proc gen_local =
-    let sym = node[0].sym
     let typ = node[0].sym.typ
     let ll_type = get_type(module, typ)
     let name = mangle_local_name(module, sym)
@@ -567,12 +576,11 @@ proc gen_single_var(module: BModule; node: PNode) =
       gen_copy(module, adr, value, node[2].typ)
     module.add_value(sym.id, adr)
 
-  let name = node[0]
-  let sym = node[0].sym
-  if sfGlobal in sym.flags:
-    gen_global()
-  else:
-    gen_local()
+  if (sfCompileTime notin sym.flags) and (lfNoDecl notin sym.loc.flags):
+    if sfGlobal in sym.flags:
+      gen_global()
+    else:
+      gen_local()
 
 proc gen_var_section(module: BModule; node: PNode) =
   for def in node.sons:
@@ -833,14 +841,18 @@ proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
   #echo "gen_sym_expr_lvalue kind: ", node.sym.kind
 
   case node.sym.kind:
-  of skVar, skForVar, skLet, skResult, skParam:
+  of skVar, skForVar, skLet, skResult:
+    result = module.get_value(node.sym.id)
+    if sfGlobal in node.sym.flags and result == nil:
+      result = gen_var_prototype(module, node)
+  of skParam:
     result = module.get_value(node.sym.id)
   of skConst:
     result = gen_sym_const(module, node.sym)
   else:
     echo "fail gen_sym_expr_lvalue: ", node.sym.kind
 
-  assert result != nil
+  assert result != nil, (block: (debug(node); "rip"))
   assert_value_type(result, PointerTypeKind)
 
 proc gen_sym_expr(module: BModule; node: PNode): ValueRef =

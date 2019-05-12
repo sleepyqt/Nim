@@ -658,7 +658,7 @@ const
 
 include "system/inclrtl"
 
-const NoFakeVars* = defined(nimscript) ## `true` if the backend doesn't support \
+const NoFakeVars* = defined(nimscript) or defined(LLVM) ## `true` if the backend doesn't support \
   ## "fake variables" like `var EBADF {.importc.}: cint`.
 
 when not defined(JS) and not defined(gcDestructors):
