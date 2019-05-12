@@ -37,6 +37,10 @@ method classify_return_type*(abi: BaseAbi; module: BModule; typ: PType): ArgInfo
 
 # ------------------------------------------------------------------------------
 
+import llvm_type
+
+# ------------------------------------------------------------------------------
+
 type GenericAbi* = ref object of BaseAbi
 
 method classify_argument_type*(abi: GenericAbi; module: BModule; typ: PType): ArgInfo =

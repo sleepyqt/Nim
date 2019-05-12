@@ -7,6 +7,54 @@ from astalgo import debug
 
 proc get_type*(module: BModule; typ: PType): TypeRef
 
+# ------------------------------------------------------------------------------
+
+proc is_signed_type*(typ: PType): bool =
+  typ.kind in {tyInt .. tyInt64}
+
+proc get_type_size*(module: BModule; typ: PType): BiggestInt =
+  result = getSize(module.module_list.config, typ)
+
+proc get_type_align*(module: BModule; typ: PType): BiggestInt =
+  result = getAlign(module.module_list.config, typ)
+
+proc type_to_ptr*(value: TypeRef): TypeRef =
+  result = llvm.pointerType(value, 0)
+
+# ------------------------------------------------------------------------------
+
+proc expand_struct*(module: BModule; struct: TypeRef): seq[TypeRef] =
+  # {i8, i16, i32} -> i8, i16, i32
+  let count = int llvm.countStructElementTypes(struct)
+  setLen(result, count)
+  llvm.getStructElementTypes(struct, addr result[0])
+
+proc wrap_in_struct*(module: BModule; types: seq[TypeRef]): TypeRef =
+  # i8, i16, i32 -> {i8, i16, i32}
+  result = llvm.structTypeInContext(module.ll_context, unsafe_addr types[0], cuint len types, Bool false)
+
+proc expand_struct_to_words*(module: BModule; struct: PType): seq[TypeRef] =
+  # {i8, i16, i32} -> i32, i32
+  let size = get_type_size(module, struct)
+
+  case module.module_list.config.target.intSize:
+  of 8:
+    case size:
+    of  1 .. 8:  result = @[module.ll_int64]
+    of  9 .. 16: result = @[module.ll_int64, module.ll_int64]
+    of 17 .. 24: result = @[module.ll_int64, module.ll_int64, module.ll_int64]
+    of 25 .. 32: result = @[module.ll_int64, module.ll_int64, module.ll_int64, module.ll_int64]
+    else: assert false
+  of 4:
+    case size:
+    of 1 .. 4:   result = @[module.ll_int32]
+    of 5 .. 8:   result = @[module.ll_int32, module.ll_int32]
+    else: assert false
+  else:
+    assert false
+
+# ------------------------------------------------------------------------------
+
 import llvm_abi
 
 # Array Type -------------------------------------------------------------------
@@ -122,14 +170,6 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
     let align = get_type_align(module, typ)
     let super = if typ.sons.len == 0: nil else: typ[0]
 
-    echo "+------------------------------------------------------+"
-    echo " gen_object_type: ", name
-    echo "+------------------------------------------------------+"
-    echo " size: ", size, ", align: ", align
-    echo " final: ", isFinal(typ), ", pure: ", isPureObject(typ)
-
-    #debug typ
-
     var fields: seq[TypeRef]
     if super == nil:
       if (typ.sym != nil and sfPure in typ.sym.flags) or (tfFinal in typ.flags):
@@ -146,9 +186,6 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
 
     let fields_ptr = if fields.len == 0: nil else: addr fields[0]
     llvm.structSetBody(result, fields_ptr, cuint fields.len, 0)
-
-    echo " result = ", result
-    echo "+------------------------------------------------------+"
 
 proc get_object_case_branch_type*(module: BModule; node: PNode): TypeRef =
   var fields: seq[TypeRef]
@@ -173,7 +210,7 @@ proc get_nim_string_type*(module: BModule): TypeRef =
 
 proc get_proc_param_type*(module: BModule; typ: PType): TypeRef =
   if typ.kind == tyBool:
-    result = module.ll_logic_bool
+    result = module.ll_bool
   else:
     result = get_type(module, typ)
 
@@ -284,7 +321,7 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   assert module != nil
   assert typ != nil
   case typ.kind:
-  of tyBool: result = module.ll_bool
+  of tyBool: result = module.ll_mem_bool
   of tyInt, tyUint: result = module.ll_int
   of tyInt8, tyUInt8: result = module.ll_int8
   of tyInt16, tyUint16: result = module.ll_int16

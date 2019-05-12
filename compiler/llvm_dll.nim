@@ -131,7 +131,6 @@ type
     ConstantFPValueKind, ConstantPointerNullValueKind, ConstantTokenNoneValueKind,
     MetadataAsValueValueKind, InlineAsmValueKind, InstructionValueKind
 
-type
   Linkage* = enum
     ExternalLinkage,          ## *< Externally visible function
     AvailableExternallyLinkage, LinkOnceAnyLinkage, ## *< Keep one copy of function when linking (inline)
@@ -158,7 +157,6 @@ type
     HiddenVisibility,         ## *< The GV is hidden
     ProtectedVisibility       ## *< The GV is protected
 
-type
   CallConv* = enum
     CCallConv = 0, FastCallConv = 8, ColdCallConv = 9, GHCCallConv = 10, HiPECallConv = 11,
     WebKitJSCallConv = 12, AnyRegCallConv = 13, PreserveMostCallConv = 14,

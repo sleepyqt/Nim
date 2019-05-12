@@ -3,7 +3,7 @@ from magicsys import getCompilerProc
 from astalgo import debug
 import ast, types
 import llvm_dll as llvm
-import llvm_data, llvm_type, llvm_expr, llvm_abi
+import llvm_data, llvm_type, llvm_expr, llvm_abi, llvm_aux
 
 proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
   result = module.get_value(sym.id)
@@ -77,7 +77,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
       case ret_info.class:
 
       of ArgClass.Direct:
-        ret_addr = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
+        ret_addr = build_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
         module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
         gen_default_init(module, ret_type, ret_addr)
 
@@ -96,7 +96,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
         inc ir_param_index
 
       of ArgClass.Expand:
-        ret_addr = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
+        ret_addr = build_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
         module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
 
         gen_default_init(module, ret_type, ret_addr)
@@ -118,7 +118,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
 
       of ArgClass.Direct:
         let ll_type   = get_proc_param_type(module, ast_param.typ)
-        let local_adr = insert_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
+        let local_adr = build_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
         let value     = llvm.getParam(proc_val, cuint ir_param_index)
         discard llvm.buildStore(module.ll_builder, value, local_adr)
         module.add_value(ast_param.sym.id, local_adr)
@@ -138,7 +138,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
 
       of ArgClass.Expand:
         let ll_type   = get_proc_param_type(module, ast_param.typ)
-        let local_adr = insert_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
+        let local_adr = build_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
         module.add_value(ast_param.sym.id, local_adr)
 
         if ExpandToWords in arg_info.flags:
@@ -172,10 +172,10 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
       of ArgClass.OpenArray:
         var struct_fields = [get_proc_param_type(module, ast_param.typ), module.ll_int]
         let ll_type = llvm.structTypeInContext(module.ll_context, addr struct_fields[0], 2, Bool 0)
-        let local_adr = insert_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
+        let local_adr = build_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
         module.add_value(ast_param.sym.id, local_adr)
-        let adr_field_data = struct_field_ptr(module, local_adr, constant(module, 0i32))
-        let adr_field_lengt = struct_field_ptr(module, local_adr, constant(module, 1i32))
+        let adr_field_data = build_field_ptr(module, local_adr, constant(module, 0i32))
+        let adr_field_lengt = build_field_ptr(module, local_adr, constant(module, 1i32))
         let param_data = llvm.getParam(proc_val, cuint ir_param_index + 0)
         let param_length = llvm.getParam(proc_val, cuint ir_param_index + 1)
         discard llvm.buildStore(module.ll_builder, param_data, adr_field_data)
@@ -275,11 +275,11 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
       discard
 
     of ArgClass.Indirect:
-      result = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "call.tmp")
+      result = build_entry_alloca(module, get_proc_param_type(module, ret_type), "call.tmp")
       args.add result
 
     of ArgClass.Expand:
-      result = insert_entry_alloca(module, get_proc_param_type(module, ret_type), "call.tmp")
+      result = build_entry_alloca(module, get_proc_param_type(module, ret_type), "call.tmp")
 
     of ArgClass.Ignore:
       discard
@@ -318,19 +318,19 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
     of ArgClass.Direct:
       case arg_type.kind:
       of tyBool:
-        args.add llvm.buildTrunc(module.ll_builder, arg_value, module.ll_logic_bool, "call_bool_trunc")
+        args.add llvm.buildTrunc(module.ll_builder, arg_value, module.ll_bool, "call_mem_bool_trunc")
       else:
         args.add arg_value
 
     of ArgClass.Indirect:
       let ll_arg_type = get_proc_param_type(module, arg_type)
-      let arg_copy    = insert_entry_alloca(module, ll_arg_type, "arg_copy")
+      let arg_copy    = build_entry_alloca(module, ll_arg_type, "arg_copy")
       gen_copy(module, arg_copy, arg_value, arg_type)
       args.add arg_copy
 
     of ArgClass.Expand:
       let ll_arg_type = get_proc_param_type(module, arg_type)
-      let arg_copy    = insert_entry_alloca(module, ll_arg_type, "arg_copy")
+      let arg_copy    = build_entry_alloca(module, ll_arg_type, "arg_copy")
       gen_copy(module, arg_copy, arg_value, arg_type)
 
       if ExpandToWords in arg_info.flags:
