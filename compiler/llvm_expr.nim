@@ -955,6 +955,7 @@ proc gen_conv(module: BModule; node: PNode): ValueRef =
   const Integers   = {tyInt .. tyInt64}
   const Floats     = {tyFloat .. tyFloat128}
   const Unsigned   = {tyUint .. tyUInt64}
+  const Pointers   = {tyPtr, tyPointer, tyCString, tyRef}
 
   if ll_src_type == ll_dst_type:
     result = value
@@ -991,8 +992,12 @@ proc gen_conv(module: BModule; node: PNode): ValueRef =
     # uint -> float
     result = llvm.buildUIToFP(module.ll_builder, value, ll_dst_type, "")
 
+  elif (src_type.kind in Pointers) and (dst_type.kind in Pointers):
+    # pointer -> pointer
+    result = llvm.buildBitCast(module.ll_builder, value, ll_dst_type, "")
+
   else:
-    echo "unsupported ", src_type.kind, " =====> ", dst_type.kind
+    echo "unsupported conv", src_type.kind, " =====> ", dst_type.kind
 
 proc gen_check_range_float(module: BModule; node: PNode): ValueRef =
   # todo
@@ -1010,6 +1015,19 @@ proc gen_check_range(module: BModule; node: PNode): ValueRef =
 proc gen_check_range64(module: BModule; node: PNode): ValueRef =
   # todo
   result = gen_check_range(module, node)
+
+proc gen_cast_expr(module: BModule; node: PNode): ValueRef =
+  let value = gen_expr(module, node[1])
+  let value_type = node[1].typ
+  let dest_type  = node.typ
+
+  if value_type.kind in {tyPtr, tyPointer, tyCString}:
+    if dest_type.kind in {tyPtr, tyPointer, tyCString}:
+      result = llvm.buildBitCast(module.ll_builder, value, get_type(module, dest_type), "cast")
+
+# var buildPtrToInt*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+# var buildIntToPtr*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
+# var buildBitCast*: proc(a2: BuilderRef; val: ValueRef; destTy: TypeRef; name: cstring): ValueRef {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -1060,7 +1078,7 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkObjConstr:
     result = gen_object_lit(module, node)
   of nkCast:
-    discard
+    result = gen_cast_expr(module, node)
   of nkHiddenStdConv, nkHiddenSubConv, nkConv:
     result = gen_conv(module, node)
   of nkHiddenAddr, nkAddr:

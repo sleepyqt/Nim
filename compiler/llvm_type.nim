@@ -140,6 +140,10 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
       fields.add get_object_type(module, super)
 
     gen_object_fields(module, fields, typ.n)
+
+    if len(fields) == 0:
+      fields.add module.ll_int8
+
     let fields_ptr = if fields.len == 0: nil else: addr fields[0]
     llvm.structSetBody(result, fields_ptr, cuint fields.len, 0)
 
