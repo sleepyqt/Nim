@@ -193,6 +193,12 @@ proc get_object_case_branch_type*(module: BModule; node: PNode): TypeRef =
   result = llvm.structCreateNamed(module.ll_context, "anonymous") # todo: cache?
   llvm.structSetBody(result, addr fields[0], cuint fields.len, 0)
 
+proc get_tuple_type(module: BModule; typ: PType): TypeRef =
+  var fields: seq[TypeRef]
+  for item in typ.sons:
+    fields.add get_type(module, item)
+  result = llvm.structTypeInContext(module.ll_context, addr fields[0], cuint len fields, Bool 0)
+
 # String Types -----------------------------------------------------------------
 
 proc get_cstring_type*(module: BModule; typ: PType): TypeRef =
@@ -330,7 +336,7 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyFloat, tyFloat64: result = module.ll_float64
   of tyFloat32: result = module.ll_float32
   of tyObject: result = get_object_type(module, typ)
-  of tyTuple: result = get_object_type(module, typ)
+  of tyTuple: result = get_tuple_type(module, typ)
   of tyPointer, tyNil: result = module.ll_pointer
   of tyProc: result = type_to_ptr get_proc_type(module, typ)
   of tyRange: result = get_range_type(module, typ)

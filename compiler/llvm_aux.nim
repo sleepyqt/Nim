@@ -209,15 +209,15 @@ proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv =
     case os:
     of osWindows:
       case cc:
-      of ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = Win64CallConv
+      of ccNoConvention, ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = Win64CallConv
       else: assert false
     of osLinux:
       case cc:
-      of ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = X8664SysVCallConv
+      of ccNoConvention, ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = X8664SysVCallConv
       else: assert false
     of osStandalone:
       case cc:
-      of ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = X8664SysVCallConv
+      of ccNoConvention, ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = X8664SysVCallConv
       else: assert false
     else: assert false
   # ------------  end ------------

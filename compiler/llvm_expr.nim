@@ -183,7 +183,7 @@ proc gen_int_set_lit(module: BModule; node: PNode; size: int): ValueRef =
   result = llvm.buildLoad(module.ll_builder, accum, "curly.load")
 
 proc gen_array_set_lit(module: BModule; node: PNode; size: int): ValueRef =
-  discard
+  assert false
 
 proc gen_set_lit(module: BModule; node: PNode): ValueRef =
   #echo "gen_set_lit:"
@@ -313,29 +313,10 @@ proc gen_magic_length(module: BModule; node: PNode): ValueRef =
   else:
     assert false
 
-proc gen_magic_in_set(module: BModule; node: PNode): ValueRef =
-  let set_type = node[1].typ
-  let set_size = get_type_size(module, set_type)
-  let val_type = node[2].typ
-  let ll_val_type = get_type(module, val_type)
+include llvm_magic_set
 
-  assert node[1] != nil
-  assert node[2] != nil
-
-  #echo "ll_val_type = ", ll_val_type
-
-  if set_size <= 8:
-    # result = if (set_value and (1 shl value)) != 0
-    let set_value = gen_expr(module, node[1])
-    let value = gen_expr(module, node[2])
-    let one = llvm.constInt(ll_val_type, 1, Bool 0)
-    let zero = llvm.constInt(ll_val_type, 0, Bool 0)
-    let bit = llvm.buildShl(module.ll_builder, one, value, "inset.bit")
-    let merged = llvm.buildAnd(module.ll_builder, set_value, bit, "inset.merged")
-    let r_bool =  llvm.buildICmp(module.ll_builder, IntNE, merged, zero, "inset.r_bool")
-    result = build_i1_to_i8(module, r_bool)
-  else:
-    assert false
+proc gen_magic_length_str(module: BModule; node: PNode): ValueRef =
+  assert false
 
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
@@ -447,6 +428,19 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   # unsigned cmp
   of mLeU: result = cmp_int(llvm.IntULE)
   of mLtU: result = cmp_int(llvm.IntULT)
+  # char cmp
+  of mEqCh: result = cmp_int(llvm.IntEQ)
+  of mLtCh: result = cmp_int(llvm.IntULT)
+  of mLeCh: result = cmp_int(llvm.IntULE)
+  # bool cmp
+  of mEqB: result = cmp_int(llvm.IntEQ)
+  of mLtB: result = cmp_int(llvm.IntULT)
+  of mLeB: result = cmp_int(llvm.IntULE)
+  # ref cmp
+  of mEqRef: result = cmp_int(llvm.IntEQ)
+  of mEqUntracedRef: result = cmp_int(llvm.IntEQ)
+  of mLePtr: result = cmp_int(llvm.IntULE)
+  of mLtPtr: result = cmp_int(llvm.IntULT)
   #of mLeU64: discard
   #of mLtU64: discard
   # boolean
@@ -503,8 +497,19 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mInc: gen_magic_inc(module, node)
   of mDec: gen_magic_dec(module, node)
   of mLengthOpenArray: result = gen_magic_length(module, node)
+  of mLengthStr: result = gen_magic_length_str(module, node)
   #of mOrd: discard
   # sets
+  of mIncl: gen_incl_set(module, node)
+  of mExcl: gen_excl_set(module, node)
+  of mCard: result = gen_card_set(module, node)
+  of mLtSet: result = gen_lt_set(module, node)
+  of mLeSet: result = gen_le_set(module, node)
+  of mEqSet: result = gen_eq_set(module, node)
+  of mMulSet: result = gen_mul_set(module, node)
+  of mPlusSet: result = gen_plus_set(module, node)
+  of mMinusSet: result = gen_minus_set(module, node)
+  of mSymDiffSet: result = gen_sym_diff_set(module, node)
   of mInSet: result = gen_magic_in_set(module, node)
   else: echo "unknown magic: ", op
 
@@ -929,7 +934,16 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
   of tySequence:
     assert false
   of tyTuple:
-    assert false
+    var indices = [constant_int(module, 0), rhs]
+    echo "indices = ", indices
+    echo "L = ", lhs
+    echo "R = ", rhs
+    assert module != nil
+    assert module.ll_builder != nil
+    assert lhs != nil
+    assert rhs != nil
+    assert addr(indices[0]) != nil
+    result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "tuple.index")
   else:
     assert false
 

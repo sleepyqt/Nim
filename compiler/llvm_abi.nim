@@ -134,6 +134,9 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
   of tyProc:
     result.class = Direct
 
+  of tyRange:
+    result.class = Direct
+
   else:
     module.ice("classify_argument_type: " & $typ.kind)
 
@@ -166,6 +169,9 @@ method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType):
     result.class = OpenArray
 
   of tyProc:
+    result.class = Direct
+
+  of tyRange:
     result.class = Direct
 
   else:
