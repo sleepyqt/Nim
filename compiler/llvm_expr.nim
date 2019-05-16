@@ -50,6 +50,8 @@ proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
       let dst = llvm.buildBitCast(module.ll_builder, lhs, module.ll_pointer, "")
       let src = llvm.buildBitCast(module.ll_builder, rhs, module.ll_pointer, "")
       build_call_memcpy(module, dst, src, size)
+  of tyProc:
+    discard llvm.buildStore(module.ll_builder, rhs, lhs)
   else:
     #echo "gen_copy lhs: ", lhs, ", rhs: ", rhs
     assert(false)
@@ -318,6 +320,14 @@ include llvm_magic_set
 proc gen_magic_length_str(module: BModule; node: PNode): ValueRef =
   assert false
 
+proc gen_magic_eq_proc(module: BModule; node: PNode): ValueRef =
+  if node[1].typ.callConv == ccClosure:
+    assert false
+  else:
+    let lhs = gen_expr(module, node[1])
+    let rhs = gen_expr(module, node[2])
+    result = llvm.buildICmp(module.ll_builder, IntEQ, lhs, rhs, "eq.proc")
+
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
   proc unary(prc: UnaryProc): ValueRef =
@@ -441,6 +451,8 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mEqUntracedRef: result = cmp_int(llvm.IntEQ)
   of mLePtr: result = cmp_int(llvm.IntULE)
   of mLtPtr: result = cmp_int(llvm.IntULT)
+  # proc cmp
+  of mEqProc: result = gen_magic_eq_proc(module, node)
   #of mLeU64: discard
   #of mLtU64: discard
   # boolean

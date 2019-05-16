@@ -248,15 +248,17 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
 # ------------------------------------------------------------------------------
 
 proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
-  echo ""
-  echo "*** gen_call_expr ***"
+  echo "+++++++++++++++++++++++++++++++++++++++++++"
+  echo "+ gen_call_expr: ", node[0].sym.name.s
+  echo "+ sym.flags: ", node[0].sym.flags
+  echo "+++++++++++++++++++++++++++++++++++++++++++"
 
-  #debug node[0].sym.ast
+  let proc_sym   = node[0].sym
+  let proc_typ   = node[0].sym.typ
+  let ret_type   = proc_typ[0]
+  let callee_val = gen_expr(module, node[0])
 
   var args: seq[ValueRef]
-  let proc_sym   = node[0].sym
-  let ret_type   = getReturnType(proc_sym)
-  let callee_val = gen_expr(module, node[0])
 
   let abi = get_abi(module)
 
@@ -299,7 +301,7 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
 
     # handle openarray
     if arg_type.kind in {tyArray}:
-      let param_type = proc_sym.typ.n.sons[ast_arg_index].typ
+      let param_type = proc_typ.n.sons[ast_arg_index].typ
       if param_type.kind in {tyOpenArray, tyVarargs}:
         # convert array[T] -> openArray[T]
 

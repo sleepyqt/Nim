@@ -241,6 +241,7 @@ proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv =
       of ccDefault: result = X86StdcallCallConv
       of ccStdCall: result = X86StdcallCallConv
       of ccCDecl: result = CCallConv
+      of ccNoInline: result = X86StdcallCallConv
       else: assert false, $cc
     of osLinux: assert false, $cc
     of osStandalone: assert false, $cc
@@ -250,15 +251,21 @@ proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv =
     case os:
     of osWindows:
       case cc:
-      of ccNoConvention, ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = Win64CallConv
+      of ccNoConvention, ccDefault, ccStdCall, ccCDecl,
+         ccSafeCall, ccFastCall, ccNoInline:
+        result = Win64CallConv
       else: assert false, $cc
     of osLinux:
       case cc:
-      of ccNoConvention, ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = X8664SysVCallConv
+      of ccNoConvention, ccDefault, ccStdCall, ccCDecl,
+         ccSafeCall, ccFastCall, ccNoInline:
+        result = X8664SysVCallConv
       else: assert false, $cc
     of osStandalone:
       case cc:
-      of ccNoConvention, ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = X8664SysVCallConv
+      of ccNoConvention, ccDefault, ccStdCall,
+         ccCDecl, ccSafeCall, ccFastCall, ccNoInline:
+        result = X8664SysVCallConv
       else: assert false, $cc
     else: assert false, $cc
   # ------------  end ------------
