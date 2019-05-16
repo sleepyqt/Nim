@@ -815,6 +815,140 @@ proc gen_stmt_list(module: BModule; node: PNode) =
   for son in node.sons:
     gen_stmt(module, son)
 
+proc gen_case_stmt_generic(module: BModule; node: PNode) =
+  #[
+
+  case x:
+  of 1: discard 1
+  of 2: discard 2
+  of 3: discard 3
+  else: discard 4
+
+  entry:
+    .....
+    lhs
+    br lhs == rhs case.branch1 case.cond2
+  case.cond2:
+    br lhs == rhs case.branch2 case.cond3
+  case.cond3:
+    br lhs == rhs case.branch3 case.cond4
+  case.cond4:
+    br case.else
+  case.branch1:
+    discard 1
+    br case.exit
+  case.branch2:
+    discard 2
+    br case.exit
+  case.branch3:
+    discard 3
+    br case.exit
+  case.else:
+    discard 4
+    br case.exit
+  case.exit:
+    .....
+  ]#
+
+  let entry_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(entry_bb)
+  let exit_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "case.exit")
+
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+
+  let lhs = gen_expr(module, node[0])
+
+  var basic_blocks: seq[BasicBlockRef]
+
+  for branch in node.sons[1 .. ^1]:
+    let name = if branch.kind == nkOfBranch: "case.branch" else: "case.else"
+    let branch_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, name)
+    llvm.positionBuilderAtEnd(module.ll_builder, branch_bb)
+    # generate branch code
+    let val = gen_expr(module, branch.lastSon)
+    maybe_terminate(module, exit_bb)
+    basic_blocks.add(branch_bb)
+
+  llvm.moveBasicBlockAfter(exit_bb, llvm.getInsertBlock(module.ll_builder))
+
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  for i, branch in node.sons[1 .. ^1]:
+    let branch_bb = basic_blocks[i]
+    if branch.kind != nkElse:
+      for cond in branch.sons[0 ..< ^1]:
+        var cmp_result: ValueRef
+
+        if cond.kind == nkRange:
+          # range cond
+          # lhs >= range_lo and lhs <= range_hi
+          let range_lo = gen_expr(module, cond[0])
+          let range_hi = gen_expr(module, cond[1])
+          let c1 = build_generic_cmp(module, ">=", lhs, range_lo, node[0].typ)
+          let c2 = build_generic_cmp(module, "<=", lhs, range_hi, node[0].typ)
+          cmp_result = build_i8_to_i1(module, llvm.buildAnd(module.ll_builder, c1, c2, ""))
+        else:
+          # scalar cond
+          let rhs =
+            if cond.kind in {nkIntLit}: # literal may get wrong type...
+              convert_scalar(module, gen_expr(module, cond), llvm.typeOf(lhs), is_signed_type(node[0].typ))
+            else:
+              gen_expr(module, cond)
+
+          let cmp = build_generic_cmp(module, "==", lhs, rhs, node[0].typ)
+          cmp_result = build_i8_to_i1(module, cmp)
+
+        let save_bb = llvm.getInsertBlock(module.ll_builder)
+        let cond_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "case.cond")
+        llvm.moveBasicBlockAfter(cond_bb, save_bb)
+        llvm.positionBuilderAtEnd(module.ll_builder, save_bb)
+        discard llvm.buildCondBr(module.ll_builder, cmp_result, branch_bb, cond_bb)
+        llvm.positionBuilderAtEnd(module.ll_builder, cond_bb)
+    else:
+      maybe_terminate(module, branch_bb)
+
+  llvm.positionBuilderAtEnd(module.ll_builder, exit_bb)
+
+proc gen_case_stmt_ordinal(module: BModule; node: PNode) =
+  assert false, "todo"
+  #[
+  let entry_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(entry_bb)
+  let exit_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "case.exit")
+
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+
+  let lhs = gen_expr(module, node[0])
+
+  var basic_blocks: seq[BasicBlockRef]
+
+  for branch in node.sons[1 .. ^1]:
+    let name = if branch.kind == nkOfBranch: "case.branch" else: "case.else"
+    let branch_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, name)
+    llvm.positionBuilderAtEnd(module.ll_builder, branch_bb)
+    # generate branch code
+    let val = gen_expr(module, branch.lastSon)
+    maybe_terminate(module, exit_bb)
+    basic_blocks.add(branch_bb)
+
+  llvm.moveBasicBlockAfter(exit_bb, llvm.getInsertBlock(module.ll_builder))
+  ]#
+
+proc gen_case_stmt_string(module: BModule; node: PNode) =
+  assert false, "todo"
+
+proc gen_case_stmt(module: BModule; node: PNode) =
+  case node[0].typ.kind:
+  of tyString:
+    gen_case_stmt_string(module, node)
+  of tyFloat .. tyFloat128:
+    gen_case_stmt_generic(module, node)
+  else:
+    if node[0].kind == nkSym and sfGoto in node[0].sym.flags:
+      assert false, "todo"
+    else:
+      gen_case_stmt_generic(module, node)
+      #gen_case_stmt_ordinal(module, node) # todo
+
 # ------------------------------------------------------------------------------
 
 proc gen_stmt_list_expr(module: BModule; node: PNode): ValueRef =
@@ -1152,7 +1286,7 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkForStmt:
     discard
   of nkCaseStmt:
-    discard
+    gen_case_stmt(module, node)
   of nkReturnStmt:
     gen_return(module, node)
   of nkBreakStmt:

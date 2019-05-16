@@ -75,6 +75,47 @@ proc constant_false*(module: BModule): ValueRef =
 
 # ------------------------------------------------------------------------------
 
+proc build_generic_cmp*(module: BModule; pred: string; lhs, rhs: ValueRef; typ: PType): ValueRef =
+  case typ.kind:
+  of tyInt .. tyInt64:
+    var op: IntPredicate
+    case pred:
+    of "==": op = IntEq
+    of "!=": op = IntNE
+    of ">=": op = IntSGE
+    of "<=": op = IntSLE
+    of ">":  op = IntSGT
+    of "<":  op = IntSLT
+    else: assert false
+    result = llvm.buildICmp(module.ll_builder, op, lhs, rhs, "")
+  of tyUint .. tyUInt64, tyEnum, tyChar:
+    var op: IntPredicate
+    case pred:
+    of "==": op = IntEq
+    of "!=": op = IntNE
+    of ">=": op = IntUGE
+    of "<=": op = IntULE
+    of ">":  op = IntUGT
+    of "<":  op = IntULT
+    else: assert false
+    result = llvm.buildICmp(module.ll_builder, op, lhs, rhs, "")
+  of tyFloat, tyFloat32, tyFloat64:
+    var op: RealPredicate
+    case pred:
+    of "==": op = RealOEQ
+    of "!=": op = RealONE
+    of ">=": op = RealOGE
+    of "<=": op = RealOLE
+    of ">":  op = RealOGT
+    of "<":  op = RealOLT
+    else: assert false
+    result = llvm.buildFCmp(module.ll_builder, op, lhs, rhs, "")
+  of tyString:
+    assert false
+  else: assert false
+
+# ------------------------------------------------------------------------------
+
 proc build_i8_to_i1*(module: BModule; value: ValueRef): ValueRef =
   assert value != nil
   if llvm.getValueKind(value) == InstructionValueKind:
@@ -200,28 +241,28 @@ proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv =
       of ccDefault: result = X86StdcallCallConv
       of ccStdCall: result = X86StdcallCallConv
       of ccCDecl: result = CCallConv
-      else: assert false
-    of osLinux: assert false
-    of osStandalone: assert false
-    else: assert false
+      else: assert false, $cc
+    of osLinux: assert false, $cc
+    of osStandalone: assert false, $cc
+    else: assert false, $cc
   # ------------ AMD64 ------------
   of cpuAmd64:
     case os:
     of osWindows:
       case cc:
       of ccNoConvention, ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = Win64CallConv
-      else: assert false
+      else: assert false, $cc
     of osLinux:
       case cc:
       of ccNoConvention, ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = X8664SysVCallConv
-      else: assert false
+      else: assert false, $cc
     of osStandalone:
       case cc:
       of ccNoConvention, ccDefault, ccStdCall, ccCDecl, ccSafeCall, ccFastCall: result = X8664SysVCallConv
-      else: assert false
-    else: assert false
+      else: assert false, $cc
+    else: assert false, $cc
   # ------------  end ------------
-  else: assert false
+  else: assert false, $cc
 
 # Intrisics --------------------------------------------------------------------
 
