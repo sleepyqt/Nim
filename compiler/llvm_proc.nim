@@ -1,6 +1,7 @@
 from transf import transformBody
 from magicsys import getCompilerProc
 from astalgo import debug
+from ropes import `$`
 import ast, types
 import llvm_dll as llvm
 import llvm_data, llvm_type, llvm_expr, llvm_abi, llvm_aux
@@ -8,8 +9,12 @@ import llvm_data, llvm_type, llvm_expr, llvm_abi, llvm_aux
 proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
   result = module.get_value(sym.id)
   if result == nil:
+    echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+    echo "~ gen_importc_proc: ", sym.name.s, " -> ", $sym.loc.r
+    echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+    debug sym
     let proc_type = get_proc_type(module, sym.typ)
-    let proc_name = sym.name.s
+    let proc_name = $sym.loc.r
     result = llvm.addFunction(module.ll_module, proc_name, proc_type)
     llvm.setFunctionCallConv(result, cuint map_call_conv(module, sym.typ.callConv))
     module.add_value(sym.id, result)
@@ -247,61 +252,38 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
 
 # ------------------------------------------------------------------------------
 
-proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
-  echo "+++++++++++++++++++++++++++++++++++++++++++"
-  echo "+ gen_call_expr: ", node[0].sym.name.s
-  echo "+ sym.flags: ", node[0].sym.flags
-  echo "+++++++++++++++++++++++++++++++++++++++++++"
-
-  let proc_sym   = node[0].sym
-  let proc_typ   = node[0].sym.typ
-  let ret_type   = proc_typ[0]
-  let callee_val = gen_expr(module, node[0])
-
-  var args: seq[ValueRef]
-
+proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: seq[ValueRef];
+                                                                     arguments_types: seq[PType]): ValueRef =
+  assert callee != nil
+  assert proc_type != nil
+  assert proc_type.kind == tyProc
   let abi = get_abi(module)
-
+  let ret_type = proc_type[0]
   var ret_info: ArgInfo
-
-  assert callee_val != nil
+  var ll_args: seq[ValueRef]
 
   if ret_type == nil:
     discard
   else:
     ret_info = abi.classify_return_type(module, ret_type)
-
+    let ll_ret_type = get_proc_param_type(module, ret_type)
     case ret_info.class
-
-    of ArgClass.Direct:
-      discard
-
-    of ArgClass.Indirect:
-      result = build_entry_alloca(module, get_proc_param_type(module, ret_type), "call.tmp")
-      args.add result
-
-    of ArgClass.Expand:
-      result = build_entry_alloca(module, get_proc_param_type(module, ret_type), "call.tmp")
-
-    of ArgClass.Ignore:
-      discard
-
-    of ArgClass.OpenArray:
-      discard
-
-    # end case
+    of ArgClass.Direct: discard
+    of ArgClass.Indirect: result = build_entry_alloca(module, ll_ret_type, "call.tmp"); ll_args.add result
+    of ArgClass.Expand: result = build_entry_alloca(module, ll_ret_type, "call.tmp")
+    of ArgClass.Ignore: discard
+    of ArgClass.OpenArray: discard
 
   # *** call arguments ***
 
-  var ast_arg_index = 1
-  for ast_arg in node.sons[1 .. ^1]:
-    let arg_value = gen_expr(module, ast_arg)
-    let arg_type  = ast_arg.typ
-    let arg_info  = abi.classify_argument_type(module, arg_type)
+  var index = 0
+  for arg_value in arguments:
+    let arg_type = arguments_types[index]
+    let arg_info = abi.classify_argument_type(module, arg_type)
 
     # handle openarray
     if arg_type.kind in {tyArray}:
-      let param_type = proc_typ.n.sons[ast_arg_index].typ
+      let param_type = proc_type.n.sons[index + 1].typ
       if param_type.kind in {tyOpenArray, tyVarargs}:
         # convert array[T] -> openArray[T]
 
@@ -309,32 +291,29 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
         var indices = [constant(module, 0i32), constant(module, 0i32)]
         let data_ptr = llvm.buildGEP(module.ll_builder, arg_value, addr indices[0], 2, "")
 
-        args.add data_ptr
-        args.add constant_int(module, int lengthOrd(module.module_list.config, arg_type))
+        ll_args.add data_ptr
+        ll_args.add constant_int(module, int lengthOrd(module.module_list.config, arg_type))
 
-        inc ast_arg_index
+        inc index
         continue
 
+    # classify arguments
     case arg_info.class
-
     of ArgClass.Direct:
       case arg_type.kind:
       of tyBool:
-        args.add llvm.buildTrunc(module.ll_builder, arg_value, module.ll_bool, "call_mem_bool_trunc")
+        ll_args.add llvm.buildTrunc(module.ll_builder, arg_value, module.ll_bool, "call_mem_bool_trunc")
       else:
-        args.add arg_value
-
+        ll_args.add arg_value
     of ArgClass.Indirect:
       let ll_arg_type = get_proc_param_type(module, arg_type)
       let arg_copy    = build_entry_alloca(module, ll_arg_type, "arg_copy")
       gen_copy(module, arg_copy, arg_value, arg_type)
-      args.add arg_copy
-
+      ll_args.add arg_copy
     of ArgClass.Expand:
       let ll_arg_type = get_proc_param_type(module, arg_type)
       let arg_copy    = build_entry_alloca(module, ll_arg_type, "arg_copy")
       gen_copy(module, arg_copy, arg_value, arg_type)
-
       if ExpandToWords in arg_info.flags:
         var expanded     = expand_struct_to_words(module, arg_type)
         let bitcast_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool 0)
@@ -342,38 +321,29 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
         for i, item in expanded:
           var indices = [constant(module, 0i32), constant(module, int32 i)]
           let adr = llvm.buildGEP(module.ll_builder, abi_cast, addr indices[0], 2, "")
-          args.add llvm.buildLoad(module.ll_builder, adr, "")
+          ll_args.add llvm.buildLoad(module.ll_builder, adr, "")
       else:
         var expanded = expand_struct(module, ll_arg_type)
-
     of ArgClass.Ignore:
       discard
-
     of ArgClass.OpenArray:
       discard
-
-    # end case
-
-    inc ast_arg_index
-
+    inc index
   # end for
 
-  let args_addr = if args.len == 0: nil else: addr args[0]
+  let args_addr = if ll_args.len == 0: nil else: addr ll_args[0]
 
   if ret_type == nil:
-    discard llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
+    discard llvm.buildCall(module.ll_builder, callee, args_addr, cuint len ll_args, "")
   else:
     case ret_info.class
-
     of ArgClass.Direct:
-      result = llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
-
+      result = llvm.buildCall(module.ll_builder, callee, args_addr, cuint len ll_args, "")
     of ArgClass.Indirect:
-      discard llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
-
+      discard llvm.buildCall(module.ll_builder, callee, args_addr, cuint len ll_args, "")
     of ArgClass.Expand:
       if ExpandToWords in ret_info.flags:
-        let call         = llvm.buildCall(module.ll_builder, callee_val, args_addr, cuint len args, "")
+        let call         = llvm.buildCall(module.ll_builder, callee, args_addr, cuint len ll_args, "")
         var expanded     = expand_struct_to_words(module, ret_type)
         let bitcast_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool 0)
         let abi_cast     = llvm.buildBitCast(module.ll_builder, result, type_to_ptr bitcast_type, "abi_cast")
@@ -384,23 +354,50 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
           discard llvm.buildStore(module.ll_builder, val, adr)
       else:
         assert false
-
     of ArgClass.Ignore:
       discard
-
     of ArgClass.OpenArray:
       discard
-
     # end case
+
+proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
+  echo "+++++++++++++++++++++++++++++++++++++++++++"
+  echo "+ gen_call_expr: ", node[0].sym.name.s
+  echo "+ sym.flags: ", node[0].sym.flags
+  echo "+++++++++++++++++++++++++++++++++++++++++++"
+
+  var arguments: seq[ValueRef]
+  var arguments_types: seq[PType]
+
+  for arg in node.sons[1 .. ^1]:
+    arguments.add(gen_expr(module, arg))
+    arguments_types.add(arg.typ)
+
+  result = build_call(
+    module,
+    proc_type = node[0].sym.typ,
+    callee = gen_expr(module, node[0]),
+    arguments,
+    arguments_types)
 
 # ------------------------------------------------------------------------------
 
-proc gen_call_runtime_proc*(module: BModule; name: string) =
+proc gen_call_runtime_proc*(module: BModule; name: string; arguments: seq[ValueRef]): ValueRef =
+  echo "gen_call_runtime_proc:"
   let sym = module.module_list.graph.getCompilerProc(name)
 
   if sym == nil:
     module.ice("gen_call_runtime_proc: compilerProc missing: " & name)
 
-  let procedure = gen_proc(module, sym)
+  #echo "--- typ ----"
+  #debug sym.typ
 
-  # todo: emit call
+  var arguments_types: seq[PType] = sym.typ.sons[1 .. ^1]
+  let proc_type = sym.typ
+  let callee = gen_proc(module, sym)
+
+  echo "callee = ", callee
+  echo "arguments_types = ", arguments_types
+
+  result = build_call(module, proc_type, callee, arguments, arguments_types)
+
