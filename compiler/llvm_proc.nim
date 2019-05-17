@@ -7,40 +7,54 @@ import llvm_dll as llvm
 import llvm_data, llvm_type, llvm_expr, llvm_abi, llvm_aux
 
 proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
-  result = module.get_value(sym.id)
+  result = module.get_value(sym)
   if result == nil:
-    echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-    echo "~ gen_importc_proc: ", sym.name.s, " -> ", $sym.loc.r
-    echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-    debug sym
+    #let proc_name = $sym.loc.r
+    let proc_name = mangle_proc_name(module, sym)
+    echo "## --------------------------------------------------"
+    echo "## gen_importc_proc : ", sym.name.s, " -> ", proc_name
+    echo "## id               : ", sym.id
+    echo "## flags            : ", sym.flags
+    echo "## loc flags        : ", sym.loc.flags
+    echo "## mangled name     : ", proc_name
+    echo "## --------------------------------------------------"
     let proc_type = get_proc_type(module, sym.typ)
-    let proc_name = $sym.loc.r
     result = llvm.addFunction(module.ll_module, proc_name, proc_type)
     llvm.setFunctionCallConv(result, cuint map_call_conv(module, sym.typ.callConv))
-    module.add_value(sym.id, result)
+    module.add_value(sym, result)
 
 # ------------------------------------------------------------------------------
 
 proc gen_proc_prototype*(module: BModule; sym: PSym): ValueRef =
-  result = module.get_value(sym.id)
+  result = module.get_value(sym)
   if result == nil:
     let proc_type  = get_proc_type(module, sym.typ)
     let proc_name  = mangle_proc_name(module, sym)
     let proc_val   = llvm.addFunction(module.ll_module, proc_name, proc_type)
+    echo "♥♥ --------------------------------------------------"
+    echo "♥♥ gen proc proto   : ", sym.name.s
+    echo "♥♥ id               : ", sym.id
+    echo "♥♥ type             : ", proc_type
+    echo "♥♥ flags            : ", sym.flags
+    echo "♥♥ loc flags        : ", sym.loc.flags
+    echo "♥♥ mangled name     : ", proc_name
+    echo "♥♥ --------------------------------------------------"
     llvm.setFunctionCallConv(proc_val, cuint map_call_conv(module, sym.typ.callConv))
-    module.add_value(sym.id, proc_val)
+    module.add_value(sym, proc_val)
     result = proc_val
 
 proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
-  result = module.get_value(sym.id)
+  result = module.get_value(sym)
   if result == nil:
-    echo "***********************************************************"
-    echo "* generate proc: ", sym.name.s
-    echo "* flags: ", sym.flags
-    echo "* loc kind: ", sym.loc.k
-    echo "* loc flags: ", sym.loc.flags
-    echo "* call conv: ", sym.typ.callConv
-    echo "***********************************************************"
+    echo "** --------------------------------------------------"
+    echo "** generate proc    : ", sym.name.s
+    echo "** id               : ", sym.id
+    echo "** flags            : ", sym.flags
+    echo "** loc kind         : ", sym.loc.k
+    echo "** loc flags        : ", sym.loc.flags
+    echo "** call conv        : ", sym.typ.callConv
+    echo "** mangled name     : ", mangle_proc_name(module, sym)
+    echo "** --------------------------------------------------"
 
     # save current bb for nested procs
     let incoming_bb = llvm.getInsertBlock(module.ll_builder)
@@ -60,7 +74,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
 
     let abi = get_abi(module)
 
-    module.add_value(sym.id, proc_val)
+    module.add_value(sym, proc_val)
 
     module.open_scope()
     module.top_scope.proc_val = proc_val
@@ -83,7 +97,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
 
       of ArgClass.Direct:
         ret_addr = build_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
-        module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
+        module.add_value(sym.ast.sons[resultPos].sym, ret_addr)
         gen_default_init(module, ret_type, ret_addr)
 
         if ArgFlag.Sext in ret_info.flags: llvm.addAttributeAtIndex(proc_val, AttributeIndex 0, module.ll_signext)
@@ -92,7 +106,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
       of ArgClass.Indirect:
         ret_addr = llvm.getParam(proc_val, cuint 0)
         llvm.set_value_name(ret_addr, "result")
-        module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
+        module.add_value(sym.ast.sons[resultPos].sym, ret_addr)
 
         gen_default_init(module, ret_type, ret_addr)
 
@@ -102,7 +116,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
 
       of ArgClass.Expand:
         ret_addr = build_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
-        module.add_value(sym.ast.sons[resultPos].sym.id, ret_addr)
+        module.add_value(sym.ast.sons[resultPos].sym, ret_addr)
 
         gen_default_init(module, ret_type, ret_addr)
 
@@ -117,7 +131,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
     for ast_param in sym.typ.n.sons[1 .. ^1]:
       let arg_info = abi.classify_argument_type(module, ast_param.typ)
 
-      echo "param: ", ast_param.sym.name.s, ", type: ", ast_param.typ.kind, ", class: ", arg_info.class
+      echo "** param: ", ast_param.sym.name.s, ", type: ", ast_param.typ.kind, ", class: ", arg_info.class
 
       case arg_info.class
 
@@ -126,7 +140,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
         let local_adr = build_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
         let value     = llvm.getParam(proc_val, cuint ir_param_index)
         discard llvm.buildStore(module.ll_builder, value, local_adr)
-        module.add_value(ast_param.sym.id, local_adr)
+        module.add_value(ast_param.sym, local_adr)
         llvm.set_value_name(value, ast_param.sym.name.s)
 
         if ArgFlag.Sext in arg_info.flags: llvm.addAttributeAtIndex(proc_val, AttributeIndex ir_param_index + 1, module.ll_signext)
@@ -137,14 +151,14 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
       of ArgClass.Indirect:
         llvm.addAttributeAtIndex(proc_val, AttributeIndex ir_param_index + 1, module.ll_byval)
         let value = llvm.getParam(proc_val, cuint ir_param_index)
-        module.add_value(ast_param.sym.id, value)
+        module.add_value(ast_param.sym, value)
         llvm.set_value_name(value, ast_param.sym.name.s)
         inc ir_param_index
 
       of ArgClass.Expand:
         let ll_type   = get_proc_param_type(module, ast_param.typ)
         let local_adr = build_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
-        module.add_value(ast_param.sym.id, local_adr)
+        module.add_value(ast_param.sym, local_adr)
 
         if ExpandToWords in arg_info.flags:
           var expanded     = expand_struct_to_words(module, ast_param.typ)
@@ -178,7 +192,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
         var struct_fields = [get_proc_param_type(module, ast_param.typ), module.ll_int]
         let ll_type = llvm.structTypeInContext(module.ll_context, addr struct_fields[0], 2, Bool 0)
         let local_adr = build_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
-        module.add_value(ast_param.sym.id, local_adr)
+        module.add_value(ast_param.sym, local_adr)
         let adr_field_data = build_field_ptr(module, local_adr, constant(module, 0i32))
         let adr_field_lengt = build_field_ptr(module, local_adr, constant(module, 1i32))
         let param_data = llvm.getParam(proc_val, cuint ir_param_index + 0)
@@ -234,11 +248,11 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
 
     result = proc_val
 
-    echo "########################### VERIFYING PROC ###################################"
+    echo "###################### VERIFYING PROC ", sym.name.s, " #############################"
     #viewFunctionCFG(proc_val)
     discard verifyFunction(proc_val, PrintMessageAction)
-    echo ""
-    echo "******* end gen_proc: ", sym.name.s, " *******"
+    #echo ""
+    #echo "******* end gen_proc: ", sym.name.s, " *******"
 
 proc gen_proc*(module: BModule; sym: PSym): ValueRef =
   if (sfBorrow in sym.flags) or (sym.typ == nil): return
@@ -361,10 +375,10 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
     # end case
 
 proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
-  echo "+++++++++++++++++++++++++++++++++++++++++++"
-  echo "+ gen_call_expr: ", node[0].sym.name.s
-  echo "+ sym.flags: ", node[0].sym.flags
-  echo "+++++++++++++++++++++++++++++++++++++++++++"
+  echo "++ --------------------------------------------------"
+  echo "++ gen_call_expr    : ", node[0].sym.name.s, " ", node.kind
+  echo "++ sym.flags        : ", node[0].sym.flags
+  echo "++ --------------------------------------------------"
 
   var arguments: seq[ValueRef]
   var arguments_types: seq[PType]
@@ -383,21 +397,30 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
 # ------------------------------------------------------------------------------
 
 proc gen_call_runtime_proc*(module: BModule; name: string; arguments: seq[ValueRef]): ValueRef =
-  echo "gen_call_runtime_proc:"
+  #echo "gen_call_runtime_proc:"
   let sym = module.module_list.graph.getCompilerProc(name)
 
   if sym == nil:
     module.ice("gen_call_runtime_proc: compilerProc missing: " & name)
 
-  #echo "--- typ ----"
-  #debug sym.typ
-
   var arguments_types: seq[PType] = sym.typ.sons[1 .. ^1]
   let proc_type = sym.typ
   let callee = gen_proc(module, sym)
 
-  echo "callee = ", callee
-  echo "arguments_types = ", arguments_types
+  #echo "callee = ", callee
+  #echo "arguments_types = ", arguments_types
 
   result = build_call(module, proc_type, callee, arguments, arguments_types)
 
+proc gen_call_runtime_proc*(module: BModule; node: PNode): ValueRef =
+  let proc_sym = node[namePos].sym
+
+  if lfNoDecl notin proc_sym.loc.flags:
+    let sym = module.module_list.graph.getCompilerProc($proc_sym.loc.r)
+
+    if sym == nil:
+      module.ice("gen_call_runtime_proc: compilerProc missing: " & $proc_sym.loc.r)
+
+    discard gen_proc(module, sym)
+
+  result = gen_call_expr(module, node)

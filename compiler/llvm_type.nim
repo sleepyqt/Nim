@@ -44,14 +44,14 @@ proc expand_struct_to_words*(module: BModule; struct: PType): seq[TypeRef] =
     of  9 .. 16: result = @[module.ll_int64, module.ll_int64]
     of 17 .. 24: result = @[module.ll_int64, module.ll_int64, module.ll_int64]
     of 25 .. 32: result = @[module.ll_int64, module.ll_int64, module.ll_int64, module.ll_int64]
-    else: assert false
+    else: assert false, $size
   of 4:
     case size:
     of 1 .. 4:   result = @[module.ll_int32]
     of 5 .. 8:   result = @[module.ll_int32, module.ll_int32]
-    else: assert false
+    else: assert false, $size
   else:
-    assert false
+    assert false, $size
 
 # ------------------------------------------------------------------------------
 
@@ -327,6 +327,7 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   assert module != nil
   assert typ != nil
   case typ.kind:
+  of tyDistinct, tyTypeDesc: result = get_type(module, typ.lastSon)
   of tyBool: result = module.ll_mem_bool
   of tyInt, tyUint: result = module.ll_int
   of tyInt8, tyUInt8: result = module.ll_int8
@@ -349,7 +350,6 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tyChar: result = module.ll_char
   of tyString: result = get_nim_string_type(module)
   of tySequence: result = get_seq_type(module, typ)
-  of tyDistinct: result = get_type(module, typ.lastSon)
   of tyOpenArray, tyVarargs: result = get_openarray_type(module, typ)
   of tyUncheckedArray: result = get_unchecked_array_type(module, typ)
   else: echo "get_type: unknown type kind: ", typ.kind

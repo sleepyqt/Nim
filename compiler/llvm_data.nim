@@ -5,6 +5,7 @@ from msgs import toFullPath, internalError
 from lineinfos import FileIndex
 from pathutils import AbsoluteFile
 from astalgo import getModule
+from ropes import `$`
 import llvm_dll as llvm
 
 type
@@ -94,6 +95,35 @@ proc find_module*(module: BModule; sym: PSym): BModule =
   let module_sym = getModule(sym)
   result = module.module_list.modules[module_sym.position]
 
+# Name Mangling ----------------------------------------------------------------
+
+proc mangle*(name: string): string =
+  name # todo
+
+proc mangle_proc_name*(module: BModule; sym: PSym): string =
+  if sfExportc in sym.flags or sfImportc in sym.flags:
+    result = $sym.loc.r
+  else:
+    let sig = if sym.kind in routineKinds and sym.typ != nil:
+      hashProc(sym)
+    else:
+      hashNonProc(sym)
+
+    result.add mangle(sym.name.s) & $sig
+
+    let counter = module.sig_collisions.getOrDefault(sig)
+    if counter != 0: (result.add "_" & $(counter + 1))
+    module.sig_collisions.inc(sig)
+
+proc mangle_local_name*(module: BModule; sym: PSym): string =
+  mangle(sym.name.s)
+
+proc mangle_global_var_name*(module: BModule; sym: PSym): string =
+  if sfExportc in sym.flags or sfImportc in sym.flags:
+    result = $sym.loc.r
+  else:
+    result = mangle(sym.name.s)
+
 # Scope Stack ------------------------------------------------------------------
 
 proc open_scope*(module: BModule) =
@@ -123,47 +153,17 @@ proc add_type*(module: BModule; sig: SigHash; typ: TypeRef) =
 proc get_type*(module: BModule; sig: SigHash): TypeRef =
   module.type_cache.get_or_default(sig)
 
-proc add_value*(module: BModule; id: int; val: ValueRef) =
-  module.value_cache.add(id, val)
+proc add_value*(module: BModule; sym: PSym; val: ValueRef) =
+  module.value_cache.add(sym.id, val)
 
-proc get_value*(module: BModule; id: int): ValueRef =
-  module.value_cache.get_or_default(id)
+proc get_value*(module: BModule; sym: PSym): ValueRef =
+  result = module.value_cache.get_or_default(sym.id)
+  if result == nil:
+    # same symbol may get multiple ids. Example: `newString`
+    if sym.kind == skProc and sfImportc in sym.flags:
+      let name = mangle_proc_name(module, sym)
+      result = llvm.getNamedFunction(module.ll_module, name)
 
-# Name Mangling ----------------------------------------------------------------
-
-proc mangle*(name: string): string =
-  name # todo
-
-proc mangle_proc_name*(module: BModule; sym: PSym): string =
-  let sig = if sym.kind in routineKinds and sym.typ != nil:
-    hashProc(sym)
-  else:
-    hashNonProc(sym)
-
-  result.add mangle(sym.name.s)
-  result.add $sig
-
-  let counter = module.sig_collisions.getOrDefault(sig)
-  if counter != 0:
-    result.add "_" & $(counter + 1)
-  module.sig_collisions.inc(sig)
-#[
-proc mangle_name*(module: BModule; sym: PSym): string =
-  let sig = if sym.kind in routineKinds and sym.typ != nil:
-    hashProc(sym)
-  else:
-    hashNonProc(sym)
-
-  result.add mangle(sym.name.s)
-  result.add $sig
-
-  let counter = module.module_list.sig_collisions.getOrDefault(sig)
-  if counter != 0:
-    result.add "_" & $(counter + 1)
-  module.module_list.sig_collisions.inc(sig)
-]#
-proc mangle_local_name*(module: BModule; sym: PSym): string =
-  mangle(sym.name.s)
-
-proc mangle_global_var_name*(module: BModule; sym: PSym): string =
-  mangle(sym.name.s)
+    if sym.kind == skVar and sfImportc in sym.flags:
+      let name = mangle_global_var_name(module, sym)
+      result = llvm.getNamedGlobal(module.ll_module, name)

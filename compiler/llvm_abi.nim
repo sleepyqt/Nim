@@ -101,8 +101,13 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
     result.class = Indirect
 
   of tyObject, tyTuple:
-    result.class = Expand
-    result.flags.incl ExpandToWords
+    let size = get_type_size(module, typ)
+    if size in 1 .. 16:
+      result.class = Expand
+      result.flags.incl ExpandToWords
+    else:
+      result.class = Indirect
+      result.flags.incl ByVal
 
   of tyInt .. tyInt64, tyUint .. tyUInt64:
     result.class = Direct
