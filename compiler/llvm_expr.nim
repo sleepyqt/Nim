@@ -890,6 +890,8 @@ proc gen_break(module: BModule; node: PNode) =
 
 proc gen_return(module: BModule; node: PNode) =
   let scope = module.proc_scope()
+  if node[0].kind != nkEmpty:
+    discard gen_expr(module, node[0])
   discard llvm.buildBr(module.ll_builder, scope.return_target)
 
 proc gen_block(module: BModule; node: PNode): ValueRef =
