@@ -31,9 +31,10 @@ template assert_value_type*(val: ValueRef; kind: TypeKind) =
       let type_name = llvm.printTypeToString(typ)
       let value_name = llvm.printValueToString(val)
       echo "[!!!!] assert_value_type fail: ", value_name, " type: ", type_name, " expected: ", kind
+      echo "[!!!!] ", instantiationInfo()
       disposeMessage(type_name)
       disposeMessage(value_name)
-      #assert false
+      # assert false
 
 # ------------------------------------------------------------------------------
 
@@ -243,6 +244,7 @@ proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv =
       of ccCDecl: result = CCallConv
       of ccNoInline: result = X86StdcallCallConv
       of ccInline: result = X86StdcallCallConv
+      of ccNoConvention: result = X86StdcallCallConv
       else: assert false, $cc
     of osLinux: assert false, $cc
     of osStandalone: assert false, $cc

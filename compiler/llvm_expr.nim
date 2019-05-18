@@ -3,60 +3,80 @@ import llvm_data, llvm_type, llvm_aux
 import llvm_dll as llvm
 
 from lineinfos import TLineInfo
+from lowerings import lowerTupleUnpacking
 
 import astalgo
 
 proc gen_stmt*(module: BModule; node: PNode)
 proc gen_expr*(module: BModule; node: PNode): ValueRef
 proc gen_expr_lvalue*(module: BModule; node: PNode): ValueRef
-proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType)
+proc gen_copy*(module: BModule; dst, val: ValueRef; typ: PType)
 proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef)
 
 import llvm_proc
 
 # ------------------------------------------------------------------------------
 
-proc gen_copy*(module: BModule; lhs, rhs: ValueRef; typ: PType) =
-  assert lhs != nil
-  assert rhs != nil
+proc gen_copy*(module: BModule; dst, val: ValueRef; typ: PType) =
+  assert dst != nil
+  assert val != nil
   assert typ != nil
-  #echo "gen_copy typ: ", typ.kind
+  assert_value_type(dst, PointerTypeKind)
+
   case typ.kind:
   of tyObject, tyArray, tyTuple:
-    assert_value_type(lhs, PointerTypeKind)
-    assert_value_type(rhs, PointerTypeKind)
-    let dst = llvm.buildBitCast(module.ll_builder, lhs, module.ll_pointer, "")
-    let src = llvm.buildBitCast(module.ll_builder, rhs, module.ll_pointer, "")
+    assert_value_type(val, PointerTypeKind)
+    let dst_adr = llvm.buildBitCast(module.ll_builder, dst, module.ll_pointer, "")
+    let src_adr = llvm.buildBitCast(module.ll_builder, val, module.ll_pointer, "")
     let size = get_type_size(module, typ)
-    build_call_memcpy(module, dst, src, size)
+    build_call_memcpy(module, dst_adr, src_adr, size)
+
   of tyInt .. tyInt64, tyUInt .. tyUInt64:
-    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+    assert_value_type(val, IntegerTypeKind)
+    discard llvm.buildStore(module.ll_builder, val, dst)
+
   of tyFloat, tyFloat32, tyFloat64:
-    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+    discard llvm.buildStore(module.ll_builder, val, dst)
+
   of tyPtr, tyPointer, tyCString:
-    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+    assert_value_type(val, PointerTypeKind)
+    discard llvm.buildStore(module.ll_builder, val, dst)
+
   of tyBool, tyChar, tyEnum, tyRange:
-    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+    assert_value_type(val, IntegerTypeKind)
+    discard llvm.buildStore(module.ll_builder, val, dst)
+
   of tyString:
-    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+    assert_value_type(val, PointerTypeKind)
+    discard llvm.buildStore(module.ll_builder, val, dst)
+
   of tyRef:
-    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+    assert_value_type(val, PointerTypeKind)
+    discard llvm.buildStore(module.ll_builder, val, dst)
+
   of tySequence:
-    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+    assert_value_type(val, PointerTypeKind)
+    discard llvm.buildStore(module.ll_builder, val, dst)
+
   of tySet:
     let size = get_type_size(module, typ)
     case size:
     of 1, 2, 4, 8:
-      discard llvm.buildStore(module.ll_builder, rhs, lhs)
+      assert_value_type(val, IntegerTypeKind)
+      discard llvm.buildStore(module.ll_builder, val, dst)
     else:
-      let dst = llvm.buildBitCast(module.ll_builder, lhs, module.ll_pointer, "")
-      let src = llvm.buildBitCast(module.ll_builder, rhs, module.ll_pointer, "")
-      build_call_memcpy(module, dst, src, size)
+      assert_value_type(val, PointerTypeKind)
+      let dst_adr = llvm.buildBitCast(module.ll_builder, dst, module.ll_pointer, "")
+      let src_adr = llvm.buildBitCast(module.ll_builder, val, module.ll_pointer, "")
+      build_call_memcpy(module, dst_adr, src_adr, size)
+
   of tyProc:
-    discard llvm.buildStore(module.ll_builder, rhs, lhs)
+    assert_value_type(val, PointerTypeKind)
+    discard llvm.buildStore(module.ll_builder, val, dst)
+
   else:
-    #echo "gen_copy lhs: ", lhs, ", rhs: ", rhs
-    assert(false)
+    #echo "gen_copy dst: ", dst, ", val: ", val
+    assert false, "dst: " & $dst & " val: " & $val & " typ: " & $typ.kind
 
 proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef) =
   assert typ != nil
@@ -147,6 +167,17 @@ proc gen_object_lit(module: BModule; node: PNode): ValueRef =
     let rhs = gen_expr(module, field[1])
     gen_copy(module, lhs, rhs, field[0].typ)
 
+proc gen_tuple_constr(module: BModule; node: PNode): ValueRef =
+  let ll_type = get_type(module, node.typ)
+  let alloca = build_entry_alloca(module, ll_type, "tuple.constr")
+  result = alloca
+  for i in 0 ..< node.len:
+    let field = node[i]
+    let index = constant(module, int32(i))
+    let lhs = build_field_ptr(module, alloca, index, "tuple.index")
+    let rhs = gen_expr(module, field)
+    gen_copy(module, lhs, rhs, field.typ)
+
 proc gen_array_lit(module: BModule; node: PNode): ValueRef =
   # todo: constant
   let ll_type = get_type(module, node.typ)
@@ -235,17 +266,14 @@ proc gen_str_lit(module: BModule; node: PNode): ValueRef =
 
 proc fix_literal(module: BModule; node: PNode; lhs, rhs: ValueRef): (ValueRef, ValueRef) =
   # literals sometimes getting wrong types...
-
-  result[0] = lhs
-  result[1] = rhs
-
-  if node[2].kind in {nkIntLit}:
-    result[1] = convert_scalar(module, rhs, llvm.typeOf(lhs), is_signed_type(node[1].typ))
-    #echo "fixed literal: ", node.kind, " - ", node[1].kind
-
-  if node[1].kind in {nkIntLit}:
-    result[0] = convert_scalar(module, lhs, llvm.typeOf(rhs), is_signed_type(node[2].typ))
-    #echo "fixed literal: ", node.kind, " - ", node[2].kind
+  let typ = node[1].typ
+  if typ.kind in {tyInt .. tyInt64, tyUint .. tyUint64}:
+    let ll_type = get_type(module, typ)
+    result[0] = lhs
+    result[1] = convert_scalar(module, rhs, ll_type, is_signed_type(typ))
+  else:
+    result[0] = lhs
+    result[1] = rhs
 
 proc gen_logic_or_and(module: BModule; node: PNode; op: TMagic): ValueRef =
   let incoming_bb = llvm.getInsertBlock(module.ll_builder)
@@ -530,6 +558,20 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   # of mEnumToStr:
   else: echo "unknown magic: ", op
 
+proc gen_obj_down_conv(module: BModule; node: PNode): ValueRef =
+  let ll_type = get_type(module, node.typ)
+  let value = gen_expr(module, node[0])
+  assert llvm.getTypeKind(ll_type) == PointerTypeKind
+  assert_value_type(value, PointerTypeKind)
+  result = llvm.buildBitCast(module.ll_builder, value, ll_type, "obj.down")
+
+proc gen_obj_up_conv(module: BModule; node: PNode): ValueRef =
+  let ll_type = get_type(module, node.typ)
+  let value = gen_expr(module, node[0])
+  assert llvm.getTypeKind(ll_type) == PointerTypeKind
+  assert_value_type(value, PointerTypeKind)
+  result = llvm.buildBitCast(module.ll_builder, value, ll_type, "obj.up")
+
 # Procedure Types --------------------------------------------------------------
 
 proc gen_call(module: BModule; node: PNode): ValueRef =
@@ -547,6 +589,46 @@ proc gen_asgn(module: BModule; node: PNode) =
   assert rhs != nil, $node[1].kind
   gen_copy(module, lhs, rhs, node[0].typ)
 
+proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
+  let ll_type = get_type(module, sym.typ)
+  let name = mangle_global_var_name(module, sym)
+
+  echo "☺☺ --------------------------------------------------"
+  echo "☺☺ build_global_var : ", sym.name.s
+  echo "☺☺ mangled name     : ", name
+  echo "☺☺ id               : ", sym.id
+  echo "☺☺ flags            : ", sym.flags
+  echo "☺☺ --------------------------------------------------"
+
+  result = llvm.addGlobal(module.ll_module, ll_type, name)
+  llvm.setInitializer(result, llvm.constNull(ll_type))
+
+  llvm.setVisibility(result, DefaultVisibility)
+
+  if initializer == nil or initializer.kind == nkEmpty:
+    gen_default_init(module, sym.typ, result)
+  else:
+    let value = gen_expr(module, initializer)
+    assert value != nil, $initializer.kind
+    assert result != nil
+    gen_copy(module, result, value, initializer.typ)
+  module.add_value(sym, result)
+
+proc build_local_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
+  let ll_type = get_type(module, sym.typ)
+  let name = mangle_local_name(module, sym)
+
+  result = build_entry_alloca(module, ll_type, name)
+
+  if initializer == nil or initializer.kind == nkEmpty:
+    gen_default_init(module, sym.typ, result)
+  else:
+    let value = gen_expr(module, initializer)
+    assert value != nil, $initializer.kind
+    assert result != nil
+    gen_copy(module, result, value, initializer.typ)
+  module.add_value(sym, result)
+
 proc gen_var_prototype(module: BModule; node: PNode): ValueRef =
   let sym = node.sym
   let typ = node.sym.typ
@@ -563,69 +645,61 @@ proc gen_var_prototype(module: BModule; node: PNode): ValueRef =
   llvm.setLinkage(global, ExternalLinkage)
   result = global
 
+proc gen_closure_var(module: BModule; node: PNode) =
+  debug node
+  assert false
+
+proc gen_tuple_var(module: BModule; node: PNode) =
+  assert node.kind == nkVarTuple
+
+  let length = sonsLen(node)
+
+  for i in 0 .. (length - 3):
+    if node[i].kind != nkSym:
+      let lowered = lowerTupleUnpacking(module.module_list.graph, node, module.module_sym)
+      discard gen_expr(module, lowered)
+      return
+
+  let tuple_var = gen_expr(module, node.lastSon)
+
+  for i in 0 .. (length - 3):
+    let i_node = node[i]
+    let i_sym  = node[i].sym
+
+    if sfCompileTime in i_sym.flags: continue
+
+    let index  = constant(module, int32 i)
+    let field_adr = build_field_ptr(module, tuple_var, index, "tuple.index")
+    let field_val = llvm.buildLoad(module.ll_builder, field_adr, "tuple.index.value")
+
+    if sfGlobal in i_sym.flags:
+      let variable = build_global_var(module, i_sym, nil)
+      gen_copy(module, variable, field_val, i_sym.typ)
+    else:
+      let variable = build_local_var(module, i_sym, nil)
+      gen_copy(module, variable, field_val, i_sym.typ)
+
 proc gen_single_var(module: BModule; node: PNode) =
-
   let sym = node[0].sym
-
-  proc gen_global =
-    let typ = node[0].sym.typ
-    let ll_type = get_type(module, typ)
-    let name = mangle_global_var_name(module, sym)
-
-    echo "☺☺ --------------------------------------------------"
-    echo "☺☺ gen_global       : ", sym.name.s
-    echo "☺☺ mangled name     : ", name
-    echo "☺☺ id               : ", sym.id
-    echo "☺☺ flags            : ", sym.flags
-    echo "☺☺ --------------------------------------------------"
-
-    assert ll_type != nil
-    let adr = llvm.addGlobal(module.ll_module, ll_type, name)
-    llvm.setInitializer(adr, llvm.constNull(ll_type))
-
-    #llvm.setLinkage(adr, ExternalLinkage)
-    llvm.setVisibility(adr, DefaultVisibility)
-
-    # initialize global variable
-    if node[2].kind == nkEmpty:
-      gen_default_init(module, typ, adr)
-    else:
-      let value = gen_expr(module, node[2])
-      assert value != nil
-      assert adr != nil
-      gen_copy(module, adr, value, node[2].typ)
-    module.add_value(sym, adr)
-
-  proc gen_local =
-    let typ = node[0].sym.typ
-    let ll_type = get_type(module, typ)
-    let name = mangle_local_name(module, sym)
-    assert ll_type != nil
-    let adr = build_entry_alloca(module, ll_type, name)
-    # initialize variable
-    if node[2].kind == nkEmpty:
-      gen_default_init(module, typ, adr)
-    else:
-      # initialize with exrp
-      let value = gen_expr(module, node[2])
-      assert value != nil, $node[2].kind
-      assert adr != nil
-      gen_copy(module, adr, value, node[2].typ)
-    module.add_value(sym, adr)
 
   if (sfCompileTime notin sym.flags) and (lfNoDecl notin sym.loc.flags):
     if sfGlobal in sym.flags:
-      gen_global()
+      discard build_global_var(module, sym, node[2])
     else:
-      gen_local()
+      discard build_local_var(module, sym, node[2])
 
 proc gen_var_section(module: BModule; node: PNode) =
   for def in node.sons:
     if def.kind == nkCommentStmt: continue
     if def.kind == nkIdentDefs:
-      let id = def[0]
-      let value = def[2]
-      gen_single_var(module, def)
+      if def[0].kind == nkSym:
+        let id = def[0]
+        let value = def[2]
+        gen_single_var(module, def)
+      else:
+        gen_closure_var(module, def)
+    else:
+      gen_tuple_var(module, def)
 
 # - Control Flow ---------------------------------------------------------------
 
@@ -1013,14 +1087,19 @@ proc gen_sym_const(module: BModule; sym: PSym): ValueRef =
       llvm.setGlobalConstant(result, Bool 1)
       llvm.setInitializer(result, data)
       module.add_value(sym, result)
+    of tyInt: # produced by {.intdefine.}
+      let ll_type = get_type(module, sym.typ)
+      result = constInt(ll_type, culonglong sym.ast.intVal, Bool is_signed_type(sym.typ))
     else:
-      assert false
+      assert false, $sym.typ.kind
+
+  assert result != nil, (block: (debug(sym); "nil"))
 
 proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
   #echo "gen_sym_expr_lvalue kind: ", node.sym.kind
 
   case node.sym.kind:
-  of skVar, skForVar, skLet, skResult:
+  of skVar, skForVar, skLet, skResult, skTemp:
     result = module.get_value(node.sym)
     if sfGlobal in node.sym.flags and result == nil:
       result = gen_var_prototype(module, node)
@@ -1031,7 +1110,7 @@ proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
   else:
     echo "fail gen_sym_expr_lvalue: ", node.sym.kind
 
-  assert result != nil, (block: (debug(node); "rip"))
+  assert result != nil
   assert_value_type(result, PointerTypeKind)
 
 proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
@@ -1043,7 +1122,7 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
     result = gen_proc(module, node.sym)
   of skConst:
     result = gen_sym_const(module, node.sym)
-  of skVar, skForVar, skResult, skLet, skParam:
+  of skVar, skForVar, skResult, skLet, skParam, skTemp:
     let alloca = gen_sym_expr_lvalue(module, node)
     case node.sym.typ.kind:
     of tyObject, tyArray, tyTuple:
@@ -1056,6 +1135,8 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
   else:
     echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
 
+  assert result != nil
+
 # ------------------------------------------------------------------------------
 
 proc gen_dot_expr_lvalue(module: BModule; node: PNode): ValueRef =
@@ -1067,21 +1148,39 @@ proc gen_dot_expr_lvalue(module: BModule; node: PNode): ValueRef =
   if node[0].typ.kind == tyObject:
     result = build_field_access(module, object_type, lhs, field)
   elif node[0].typ.kind == tyTuple:
-    debug node
+    for index, tuple_field in node[0].typ.n.sons:
+      if tuple_field.kind == nkSym:
+        if tuple_field.sym.id == field.id:
+          let ll_index = constant(module, int32 index)
+          result = build_field_ptr(module, lhs, ll_index, "tuple.field")
+          break
   else:
     assert false, $(node[0].typ.kind)
 
+  assert result != nil
+
 proc gen_dot_expr(module: BModule; node: PNode): ValueRef =
   let adr = gen_dot_expr_lvalue(module, node)
-  result = llvm.buildLoad(module.ll_builder, adr, "gen_dot_expr.deref")
+  assert_value_type(adr, PointerTypeKind)
+
+  if live_as_pointer(module, node[1].typ):
+    result = adr
+  else:
+    result = llvm.buildLoad(module.ll_builder, adr, "gen_dot_expr.deref")
+
+  assert result != nil
 
 proc gen_checked_field_lvalue(module: BModule; node: PNode): ValueRef =
   # todo: field checks
   result = gen_dot_expr_lvalue(module, node[0])
 
+  assert result != nil
+
 proc gen_checked_field_expr(module: BModule; node: PNode): ValueRef =
   let adr = gen_checked_field_lvalue(module, node)
   result = llvm.buildLoad(module.ll_builder, adr, "gen_checked_field_expr.deref")
+
+  assert result != nil
 
 # ------------------------------------------------------------------------------
 
@@ -1139,8 +1238,17 @@ proc gen_deref_expr_lvalue(module: BModule; node: PNode): ValueRef =
 
 proc gen_deref_expr(module: BModule; node: PNode): ValueRef =
   # *value -> value
+  #debug node
+  #debug node.typ
+  #debug node[0].typ
   let adr = gen_expr(module, node[0])
-  result = llvm.buildLoad(module.ll_builder, adr, "deref.rvalue")
+  if node[0].typ.kind == tyVar and live_as_pointer(module, node.typ) and node.kind == nkHiddenDeref:
+    # proc p1(p: Foo)
+    # proc p2(p: var Foo) = p1(p)
+    #                          p[] # ← ignore hidden deref here
+    result = adr
+  else:
+    result = llvm.buildLoad(module.ll_builder, adr, "deref.rvalue")
 
 proc gen_addr(module: BModule; node: PNode): ValueRef =
   # addr foo
@@ -1291,7 +1399,7 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkBracket:
     result = gen_array_lit(module, node)
   of nkPar, nkTupleConstr:
-    discard
+    result = gen_tuple_constr(module, node)
   of nkObjConstr:
     result = gen_object_lit(module, node)
   of nkCast:
@@ -1319,9 +1427,9 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkWhen:
     discard
   of nkObjDownConv:
-    discard
+    result = gen_obj_down_conv(module, node)
   of nkObjUpConv:
-    discard
+    result = gen_obj_up_conv(module, node)
   of nkChckRangeF:
     result = gen_check_range_float(module, node)
   of nkChckRange64:

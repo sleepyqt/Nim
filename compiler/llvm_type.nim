@@ -23,6 +23,11 @@ proc type_to_ptr*(value: TypeRef): TypeRef =
 
 # ------------------------------------------------------------------------------
 
+proc live_as_pointer*(module: BModule; typ: PType): bool =
+  result = typ.kind in {tyObject, tyArray, tyTuple}
+
+# ------------------------------------------------------------------------------
+
 proc expand_struct*(module: BModule; struct: TypeRef): seq[TypeRef] =
   # {i8, i16, i32} -> i8, i16, i32
   let count = int llvm.countStructElementTypes(struct)

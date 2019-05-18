@@ -265,6 +265,17 @@ method classify_argument_type*(abi: X86Abi; module: BModule; typ: PType): ArgInf
   of tyProc:
     result.class = Direct
 
+  of tyRange:
+    result.class = Direct
+
+  of tySet:
+    let size = get_type_size(module, typ)
+    case size:
+    of 1, 2, 4, 8:
+      result.class = Direct
+    else:
+      result.class = Indirect
+
   else:
     module.ice("classify_argument_type: " & $typ.kind)
 
@@ -288,6 +299,9 @@ method classify_return_type*(abi: X86Abi; module: BModule; typ: PType): ArgInfo 
     result.flags.incl Zext
 
   of tyProc:
+    result.class = Direct
+
+  of tyRange:
     result.class = Direct
 
   else:

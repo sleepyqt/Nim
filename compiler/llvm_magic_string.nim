@@ -10,6 +10,6 @@ proc gen_magic_length_str(module: BModule; node: PNode): ValueRef =
     assert false
 
 proc gen_magic_new_string(module: BModule; node: PNode): ValueRef =
-  debug node
+  #debug node
   #result = gen_call_expr(module, node)
   result = gen_call_runtime_proc(module, node)

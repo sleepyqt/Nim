@@ -56,6 +56,8 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
     echo "** mangled name     : ", mangle_proc_name(module, sym)
     echo "** --------------------------------------------------"
 
+    #debug sym.ast
+
     # save current bb for nested procs
     let incoming_bb = llvm.getInsertBlock(module.ll_builder)
 
@@ -65,7 +67,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
     let ret_type   = getReturnType(sym)
     let entry_bb   = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "entry")
     let return_bb  = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "return")
-    var ret_addr: ValueRef # addres of *result* variable
+    var result_var: ValueRef # addres of *result* variable
 
     llvm.setFunctionCallConv(proc_val, cuint map_call_conv(module, sym.typ.callConv))
 
@@ -96,29 +98,29 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
       case ret_info.class:
 
       of ArgClass.Direct:
-        ret_addr = build_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
-        module.add_value(sym.ast.sons[resultPos].sym, ret_addr)
-        gen_default_init(module, ret_type, ret_addr)
+        result_var = build_entry_alloca(module, get_type(module, ret_type), "result")
+        module.add_value(sym.ast.sons[resultPos].sym, result_var)
+        gen_default_init(module, ret_type, result_var)
 
         if ArgFlag.Sext in ret_info.flags: llvm.addAttributeAtIndex(proc_val, AttributeIndex 0, module.ll_signext)
         if ArgFlag.Zext in ret_info.flags: llvm.addAttributeAtIndex(proc_val, AttributeIndex 0, module.ll_zeroext)
 
       of ArgClass.Indirect:
-        ret_addr = llvm.getParam(proc_val, cuint 0)
-        llvm.set_value_name(ret_addr, "result")
-        module.add_value(sym.ast.sons[resultPos].sym, ret_addr)
+        result_var = llvm.getParam(proc_val, cuint 0)
+        llvm.set_value_name(result_var, "result")
+        module.add_value(sym.ast.sons[resultPos].sym, result_var)
 
-        gen_default_init(module, ret_type, ret_addr)
+        gen_default_init(module, ret_type, result_var)
 
         llvm.addAttributeAtIndex(proc_val, AttributeIndex 1, module.ll_sret)
 
         inc ir_param_index
 
       of ArgClass.Expand:
-        ret_addr = build_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
-        module.add_value(sym.ast.sons[resultPos].sym, ret_addr)
+        result_var = build_entry_alloca(module, get_proc_param_type(module, ret_type), "result")
+        module.add_value(sym.ast.sons[resultPos].sym, result_var)
 
-        gen_default_init(module, ret_type, ret_addr)
+        gen_default_init(module, ret_type, result_var)
 
       of ArgClass.Ignore:
         discard
@@ -221,7 +223,11 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
       case ret_info.class:
 
       of ArgClass.Direct:
-        discard llvm.buildRet(module.ll_builder, llvm.buildLoad(module.ll_builder, ret_addr, ""))
+        let result_value = llvm.buildLoad(module.ll_builder, result_var, "")
+        if ret_type != nil and ret_type.kind == tyBool:
+          discard llvm.buildRet(module.ll_builder, llvm.buildTrunc(module.ll_builder, result_value, module.ll_bool, ""))
+        else:
+          discard llvm.buildRet(module.ll_builder, result_value)
 
       of ArgClass.Indirect:
         discard llvm.buildRetVoid(module.ll_builder)
@@ -230,7 +236,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
         if ExpandToWords in ret_info.flags:
           var expanded = expand_struct_to_words(module, ret_type)
           let bitcast_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool 0)
-          let abi_cast = llvm.buildBitCast(module.ll_builder, ret_addr, type_to_ptr bitcast_type, "abi_cast")
+          let abi_cast = llvm.buildBitCast(module.ll_builder, result_var, type_to_ptr bitcast_type, "abi_cast")
           let value = llvm.buildLoad(module.ll_builder, abi_cast, "")
           discard llvm.buildRet(module.ll_builder, value)
         else:
@@ -353,6 +359,8 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
     case ret_info.class
     of ArgClass.Direct:
       result = llvm.buildCall(module.ll_builder, callee, args_addr, cuint len ll_args, "")
+      if ret_type != nil and ret_type.kind == tyBool:
+        result = llvm.buildZExt(module.ll_builder, result, module.ll_mem_bool, "")
     of ArgClass.Indirect:
       discard llvm.buildCall(module.ll_builder, callee, args_addr, cuint len ll_args, "")
     of ArgClass.Expand:
@@ -384,7 +392,9 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
   var arguments_types: seq[PType]
 
   for arg in node.sons[1 .. ^1]:
-    arguments.add(gen_expr(module, arg))
+    let value = gen_expr(module, arg)
+    assert value != nil, (block: (debug(arg); "nil"))
+    arguments.add(value)
     arguments_types.add(arg.typ)
 
   result = build_call(
