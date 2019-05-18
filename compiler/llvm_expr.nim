@@ -1124,14 +1124,10 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
     result = gen_sym_const(module, node.sym)
   of skVar, skForVar, skResult, skLet, skParam, skTemp:
     let alloca = gen_sym_expr_lvalue(module, node)
-    case node.sym.typ.kind:
-    of tyObject, tyArray, tyTuple:
+    if live_as_pointer(module, node.sym.typ):
       result = alloca
     else:
-      result = llvm.buildLoad(module.ll_builder, alloca, "gen_sym_expr.deref")
-  # of skMethod: discard
-  # of skEnumField: discard
-  # of skTemp: discard
+      result = llvm.buildLoad(module.ll_builder, alloca, "var." & node.sym.name.s)
   else:
     echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
 
@@ -1189,8 +1185,6 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
   let rhs = gen_expr(module, node[1])
   assert lhs != nil
   assert rhs != nil
-  #echo "lhs ", lhs
-  #echo "rhs ", rhs
   case node[0].typ.kind:
   of tyArray:
     var indices = [constant_int(module, 0), rhs]
@@ -1208,20 +1202,21 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
     let adr = llvm.buildLoad(module.ll_builder, lhs, "cstring.deref")
     result = llvm.buildGEP(module.ll_builder, adr, addr indices[0], cuint len indices, "cstring.index")
   of tyString:
-    assert false
+    # {{i64, i64}, [i8 x 0]}**
+    let struct = llvm.buildLoad(module.ll_builder, lhs, "")
+    # {{i64, i64}, [i8 x 0]}*
+    let data = build_field_ptr(module, struct, constant(module, int32 1), "string.data.ptr")
+    # [i8 x 0]*
+    var indices = [constant_int(module, 0), rhs]
+    result = llvm.buildGEP(module.ll_builder, data, addr indices[0], cuint len indices, "string.[]")
+    # i8*
   of tySequence:
     assert false
   of tyTuple:
-    var indices = [constant_int(module, 0), rhs]
-    echo "indices = ", indices
-    echo "L = ", lhs
-    echo "R = ", rhs
-    assert module != nil
-    assert module.ll_builder != nil
-    assert lhs != nil
-    assert rhs != nil
-    assert addr(indices[0]) != nil
-    result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "tuple.index")
+    # {i64, i64, i64}**
+    let struct = llvm.buildLoad(module.ll_builder, lhs, "")
+    # {i64, i64, i64}*
+    result = build_field_ptr(module, struct, rhs, "tuple.[]")
   else:
     assert false
 
