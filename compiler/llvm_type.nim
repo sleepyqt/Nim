@@ -24,7 +24,7 @@ proc type_to_ptr*(value: TypeRef): TypeRef =
 # ------------------------------------------------------------------------------
 
 proc live_as_pointer*(module: BModule; typ: PType): bool =
-  result = typ.kind in {tyObject, tyArray, tyTuple}
+  result = typ.kind in {tyObject, tyArray, tyTuple, tyOpenArray}
 
 # ------------------------------------------------------------------------------
 

@@ -191,16 +191,11 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
         discard
 
       of ArgClass.OpenArray:
-        var struct_fields = [get_proc_param_type(module, ast_param.typ), module.ll_int]
-        let ll_type = llvm.structTypeInContext(module.ll_context, addr struct_fields[0], 2, Bool 0)
-        let local_adr = build_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
+        let data = llvm.getParam(proc_val, cuint ir_param_index + 0)
+        let length = llvm.getParam(proc_val, cuint ir_param_index + 1)
+        let name = "param." & ast_param.sym.name.s
+        let local_adr = build_open_array(module, ast_param.typ, data, length, name)
         module.add_value(ast_param.sym, local_adr)
-        let adr_field_data = build_field_ptr(module, local_adr, constant(module, 0i32))
-        let adr_field_lengt = build_field_ptr(module, local_adr, constant(module, 1i32))
-        let param_data = llvm.getParam(proc_val, cuint ir_param_index + 0)
-        let param_length = llvm.getParam(proc_val, cuint ir_param_index + 1)
-        discard llvm.buildStore(module.ll_builder, param_data, adr_field_data)
-        discard llvm.buildStore(module.ll_builder, param_length, adr_field_lengt)
         inc ir_param_index, 2
 
       inc ast_param_index
@@ -296,6 +291,8 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
 
   # *** call arguments ***
 
+  # ............................................................................
+
   var index = 0
   for arg_value in arguments:
     let arg_type = arguments_types[index]
@@ -347,9 +344,16 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
     of ArgClass.Ignore:
       discard
     of ArgClass.OpenArray:
-      discard
+      #echo "openarray type ", llvm.typeOf(arg_value)
+      assert_value_type(arg_value, PointerTypeKind)
+      let adr_field_data = build_field_ptr(module, arg_value, constant(module, 0i32))
+      let adr_field_lengt = build_field_ptr(module, arg_value, constant(module, 1i32))
+      ll_args.add llvm.buildLoad(module.ll_builder, adr_field_data, "")
+      ll_args.add llvm.buildLoad(module.ll_builder, adr_field_lengt, "")
+
     inc index
-  # end for
+
+  # end for ....................................................................
 
   let args_addr = if ll_args.len == 0: nil else: addr ll_args[0]
 

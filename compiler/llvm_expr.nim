@@ -75,8 +75,20 @@ proc gen_copy*(module: BModule; dst, val: ValueRef; typ: PType) =
     discard llvm.buildStore(module.ll_builder, val, dst)
 
   else:
-    #echo "gen_copy dst: ", dst, ", val: ", val
     assert false, "dst: " & $dst & " val: " & $val & " typ: " & $typ.kind
+
+proc gen_copy_lvalue(module: BModule; dst, adr: ValueRef; typ: PType) =
+  assert_value_type(dst, PointerTypeKind)
+  assert_value_type(adr, PointerTypeKind)
+  case typ.kind:
+  of tyInt .. tyInt64, tyUint .. tyUint64,
+     tyFloat, tyFloat32, tyFloat64,
+     tyPtr, tyPointer, tyCString,
+     tyBool, tyChar, tyEnum, tyRange:
+    let val = llvm.buildLoad(module.ll_builder, adr, "")
+    gen_copy(module, dst, val, typ)
+  else:
+    assert false, $typ.kind
 
 proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef) =
   assert typ != nil
@@ -313,11 +325,6 @@ proc gen_logic_or_and(module: BModule; node: PNode; op: TMagic): ValueRef =
   llvm.addIncoming(phi, addr values[0], addr blocks[0], 2)
   result = build_i1_to_i8(module, phi)
 
-proc gen_magic_echo(module: BModule; node: PNode) =
-  #for i in 1 ..< node.len:
-  #  let arg_node = node[i]
-  discard
-
 proc gen_magic_inc(module: BModule; node: PNode) =
   let adr = gen_expr_lvalue(module, node[1])
   let xincrement = gen_expr(module, node[2])
@@ -361,6 +368,15 @@ proc gen_magic_eq_proc(module: BModule; node: PNode): ValueRef =
     assert lhs != nil, $node[1].kind
     assert rhs != nil, $node[2].kind
     result = llvm.buildICmp(module.ll_builder, IntEQ, lhs, rhs, "eq.proc")
+
+proc gen_magic_swap(module: BModule; node: PNode): ValueRef =
+  let lhs = gen_expr_lvalue(module, node[1])
+  let rhs = gen_expr_lvalue(module, node[2])
+  let ll_type = get_type(module, node[1].typ)
+  let tmp = build_entry_alloca(module, ll_type, "swap.tmp")
+  gen_copy_lvalue(module, tmp, lhs, node[1].typ)
+  gen_copy_lvalue(module, lhs, rhs, node[1].typ)
+  gen_copy_lvalue(module, rhs, tmp, node[1].typ)
 
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
@@ -520,6 +536,7 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mDec: gen_magic_dec(module, node)
   of mLengthOpenArray: result = gen_magic_length(module, node)
   of mExit: result = gen_call_runtime_proc(module, node)
+  of mSwap: result = gen_magic_swap(module, node)
   #of mOrd: discard
   # sets
   of mIncl: gen_incl_set(module, node)
@@ -535,24 +552,27 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mInSet: result = gen_magic_in_set(module, node)
   # strings
   of mLengthStr: result = gen_magic_length_str(module, node)
-  of mNewString: result = gen_magic_new_string(module, node)
-  # of mNewStringOfCap:
+  of mNewString: result = gen_call_runtime_proc(module, node)
+  of mNewStringOfCap: result = gen_call_runtime_proc(module, node)
+  of mCopyStr: result = gen_call_runtime_proc(module, node)
   # of mSetLengthStr:
   # of mCopyStr:
   # of mCopyStrLast:
   # of mConStrStr:
-  # of mAppendStrCh:
-  # of mAppendStrStr:
+  of mAppendStrCh: result = gen_magic_append_str_ch(module, node)
+  of mAppendStrStr: result = gen_magic_append_str_str(module, node)
+  of mSetLengthStr: result = gen_magic_set_length_str(module, node)
+  of mChr: result = gen_magic_chr(module, node)
   # of mAppendSeqElem:
   # of mEqStr:
   # of mLeStr:
   # of mLtStr:
   # of mIsNil:
-  # of mIntToStr:
-  # of mInt64ToStr:
-  # of mBoolToStr:
-  # of mCharToStr:
-  # of mFloatToStr:
+  of mIntToStr: result = gen_magic_int_to_str(module, node)
+  of mInt64ToStr: result = gen_magic_int64_to_str(module, node)
+  of mBoolToStr: result = gen_magic_bool_to_str(module, node)
+  of mCharToStr: result = gen_magic_char_to_str(module, node)
+  of mFloatToStr: result = gen_magic_float_to_str(module, node)
   # of mCStrToStr:
   # of mStrToStr:
   # of mEnumToStr:
@@ -1190,7 +1210,8 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
     var indices = [constant_int(module, 0), rhs]
     result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "array.index")
   of tyUncheckedArray:
-    assert false
+    var indices = [constant_int(module, 0), rhs]
+    result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "uncheckedarray.index")
   of tyOpenArray:
     let adr_field_data = build_field_ptr(module, lhs, constant(module, 0i32), "openarray.data")
     let adr_field_lengt = build_field_ptr(module, lhs, constant(module, 1i32), "openarray.length")
@@ -1198,8 +1219,8 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
     var indices = [rhs]
     result = llvm.buildGEP(module.ll_builder, data_ptr, addr indices[0], cuint len indices, "openarray.index")
   of tyCString:
-    var indices = [rhs]
     let adr = llvm.buildLoad(module.ll_builder, lhs, "cstring.deref")
+    var indices = [rhs]
     result = llvm.buildGEP(module.ll_builder, adr, addr indices[0], cuint len indices, "cstring.index")
   of tyString:
     # {{i64, i64}, [i8 x 0]}**
@@ -1431,10 +1452,6 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
     result = gen_check_range64(module, node)
   of nkChckRange:
     result = gen_check_range(module, node)
-  of nkStringToCString:
-    discard
-  of nkCStringToString:
-    discard
   of nkLambdaKinds:
     discard
   of nkClosure:
@@ -1492,6 +1509,10 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
     discard
   of nkBreakState:
     discard
+  of nkStringToCString:
+    result = gen_string_to_cstring(module, node)
+  of nkCStringToString:
+    result = gen_cstring_to_string(module, node)
   else: echo "gen_expr: unknown node kind: ", node.kind
 
 # ------------------------------------------------------------------------------
