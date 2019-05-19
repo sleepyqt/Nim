@@ -433,6 +433,8 @@ var isOpaqueStruct*: proc(structTy: TypeRef): Bool {.dll.}
 var setLinkage*: proc(global: ValueRef; linkage: Linkage) {.dll.}
 var setVisibility*: proc(global: ValueRef; viz: Visibility) {.dll.}
 var setFunctionCallConv*: proc(fn: ValueRef; cc: cuint) {.dll.}
+var setInstructionCallConv*: proc(instr: ValueRef; cc: cuint) {.dll.}
+var getFunctionCallConv*: proc(fn: ValueRef): cuint {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -709,6 +711,8 @@ proc ll_load_dll*: bool =
     get_proc(lib, setLinkage, "LLVMSetLinkage")
     get_proc(lib, setVisibility, "LLVMSetVisibility")
     get_proc(lib, setFunctionCallConv, "LLVMSetFunctionCallConv")
+    get_proc(lib, setInstructionCallConv, "LLVMSetInstructionCallConv")
+    get_proc(lib, getFunctionCallConv, "LLVMGetFunctionCallConv")
 
 # ------------------------------------------------------------------------------
 

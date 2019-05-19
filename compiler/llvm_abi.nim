@@ -25,6 +25,12 @@ type ArgInfo* = object
   class*: ArgClass
   flags*: set[ArgFlag]
 
+type FuncFlag* = enum
+  AttrUwtable
+
+type FuncInfo* = object
+  flags*: set[FuncFlag]
+
 # ------------------------------------------------------------------------------
 
 type BaseAbi* = ref object of RootObj
@@ -33,6 +39,9 @@ method classify_argument_type*(abi: BaseAbi; module: BModule; typ: PType): ArgIn
   discard
 
 method classify_return_type*(abi: BaseAbi; module: BModule; typ: PType): ArgInfo {.base.} =
+  discard
+
+method get_func_info*(abi: BaseAbi): FuncInfo {.base.} =
   discard
 
 # ------------------------------------------------------------------------------
@@ -88,6 +97,9 @@ method classify_return_type*(abi: GenericAbi; module: BModule; typ: PType): ArgI
   else:
     assert false
 
+method get_func_info*(abi: GenericAbi): FuncInfo =
+  discard
+
 # ------------------------------------------------------------------------------
 
 type Amd64AbiSystemV* = ref object of BaseAbi
@@ -142,6 +154,9 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
   of tyRange:
     result.class = Direct
 
+  of tyTypeDesc:
+    result.class = Ignore
+
   else:
     module.ice("classify_argument_type: " & $typ.kind)
 
@@ -181,6 +196,9 @@ method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType):
 
   else:
     module.ice("classify_return_type: " & $typ.kind)
+
+method get_func_info*(abi: Amd64AbiSystemV): FuncInfo =
+  result.flags = {AttrUwtable}
 
 # ------------------------------------------------------------------------------
 
@@ -226,6 +244,9 @@ method classify_return_type*(abi: Amd64AbiWindows; module: BModule; typ: PType):
 
   else:
     module.ice("classify_return_type: " & $typ.kind)
+
+method get_func_info*(abi: Amd64AbiWindows): FuncInfo =
+  discard
 
 # ------------------------------------------------------------------------------
 
@@ -306,6 +327,9 @@ method classify_return_type*(abi: X86Abi; module: BModule; typ: PType): ArgInfo 
 
   else:
     module.ice("classify_return_type: " & $typ.kind)
+
+method get_func_info*(abi: X86Abi): FuncInfo =
+  discard
 
 # ------------------------------------------------------------------------------
 

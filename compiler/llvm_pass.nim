@@ -5,7 +5,7 @@ from modulegraphs import PPassContext, ModuleGraph
 from platform import TSystemCPU, TSystemOS, Target
 from pathutils import changeFileExt, `$`
 from extccomp import addFileToCompile
-import llvm_data, llvm_expr
+import llvm_data, llvm_expr, llvm_aux
 import llvm_dll as llvm
 
 # Codegen Setup ----------------------------------------------------------------
@@ -88,6 +88,10 @@ proc setup_init_proc(module: BModule) =
     module.module_sym.name.s & "_module_main",
     llvm.functionType(module.ll_void, nil, 0, Bool 0))
 
+  add_function_attr(module, module.init_proc, module.ll_noinline)
+  add_function_attr(module, module.init_proc, module.ll_uwtable)
+  llvm.setFunctionCallConv(module.init_proc, cuint map_call_conv(module, ccDefault))
+
   # module entry point
   let entry_bb = llvm.appendBasicBlockInContext(module.ll_context, module.init_proc, "module_entry")
   llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
@@ -164,6 +168,13 @@ proc setup_cache(module: BModule) =
   module.ll_byval = get_attr("byval", 0)
   module.ll_zeroext = get_attr("zeroext", 0)
   module.ll_signext = get_attr("signext", 0)
+  module.ll_noinline = get_attr("noinline", 0)
+  module.ll_noreturn = get_attr("noreturn", 0)
+  module.ll_nounwind = get_attr("nounwind", 0)
+  module.ll_uwtable = get_attr("uwtable", 0)
+  module.ll_inlinehint = get_attr("inlinehint", 0)
+  module.ll_alwaysinline = get_attr("alwaysinline", 0)
+  module.ll_norecurse = get_attr("norecurse", 0)
 
 proc prepare_module_for_codegen(module: BModule) =
   module.setup_codegen()
@@ -228,6 +239,8 @@ proc get_main_proc(module: BModule): ValueRef =
 
   else: assert false
 
+  llvm.setFunctionCallConv(result, cuint map_call_conv(module, ccDefault))
+
 proc gen_main_module*(module: BModule) =
   let config = module.module_list.config
 
@@ -235,8 +248,14 @@ proc gen_main_module*(module: BModule) =
     let main_proc = get_main_proc(module)
     let entry_bb = llvm.appendBasicBlockInContext(module.ll_context, main_proc, "app_entry")
     llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-    discard llvm.buildCall(module.ll_builder, module.init_proc, nil, 0, "")
+    let call = llvm.buildCall(module.ll_builder, module.init_proc, nil, 0, "")
+    llvm.setInstructionCallConv(call, llvm.getFunctionCallConv(main_proc))
     discard llvm.buildRet(module.ll_builder, llvm.constInt(module.ll_int32, culonglong 0, Bool 0))
+
+    add_function_attr(module, main_proc, module.ll_noinline)
+    add_function_attr(module, main_proc, module.ll_uwtable)
+    add_function_attr(module, main_proc, module.ll_norecurse)
+
 
 # - Codegen Pass ---------------------------------------------------------------
 
@@ -271,27 +290,37 @@ proc myProcess(pass: PPassContext, node: PNode): PNode =
 
 # ------------------------------------------------------------------------------
 
+proc run_verify_pass(module: BModule): bool =
+  var msg: cstring
+  result = bool llvm.verifyModule(module.ll_module, llvm.PrintMessageAction, cast[cstringArray](addr msg))
+
+proc run_opt_speed_pass(module: BModule) =
+  let pm = llvm.createPassManager()
+  llvm.addPromoteMemoryToRegisterPass(pm)
+  llvm.addInstructionCombiningPass(pm)
+  llvm.addReassociatePass(pm)
+  llvm.addNewGVNPass(pm)
+  llvm.addCFGSimplificationPass(pm)
+  discard llvm.runPassManager(pm, module.ll_module)
+
 proc llWriteModules*(backend: RootRef, config: ConfigRef) =
 
   when true:
     let mod_list = BModuleList(backend)
 
     for module in mod_list.closed_modules:
-
-      when false:
-        let pm = llvm.createPassManager()
-        llvm.addPromoteMemoryToRegisterPass(pm)
-        llvm.addInstructionCombiningPass(pm)
-        llvm.addReassociatePass(pm)
-        llvm.addNewGVNPass(pm)
-        llvm.addCFGSimplificationPass(pm)
-        discard llvm.runPassManager(pm, module.ll_module)
-
       let config = module.module_list.config
       let base_file_name = completeGeneratedFilePath(config, withPackageName(config, module.file_name))
       let ll_file = changeFileExt(base_file_name, ".ll")
       let bc_file = changeFileExt(base_file_name, ".bc")
       let o_file = changeFileExt(base_file_name, ".o")
+
+      var errors = run_verify_pass(module)
+
+      if optOptimizeSpeed in config.options:
+        run_opt_speed_pass(module)
+
+      errors = run_verify_pass(module)
 
       when false:
         echo "writing module :: ", ll_file, " × ", bc_file, " x ", o_file
@@ -310,6 +339,9 @@ proc llWriteModules*(backend: RootRef, config: ConfigRef) =
 
       when false:
         var res1 = llvm.writeBitcodeToFile(module.ll_module, cstring bc_file)
+
+      if errors:
+        module.ice("broken bitcode")
 
       when true:
         var err1: cstring

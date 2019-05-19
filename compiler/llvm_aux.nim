@@ -310,3 +310,8 @@ proc build_call_memset*(module: BModule; dst: ValueRef; val: int8; len: int64) =
     var args = [ dst, constant(module, val), constant(module, int32 len), constant_false(module) ]
     discard call_intrisic(module, "llvm.memset.p0i8.i32", module.ll_memset32, args)
   else: assert(false)
+
+# ------------------------------------------------------------------------------
+
+proc add_function_attr*(module: BModule; fun: ValueRef; attr: AttributeRef) =
+  llvm.addAttributeAtIndex(fun, 0xFFFF_FFFFu32, attr)

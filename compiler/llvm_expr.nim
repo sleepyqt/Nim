@@ -378,6 +378,14 @@ proc gen_magic_swap(module: BModule; node: PNode): ValueRef =
   gen_copy_lvalue(module, lhs, rhs, node[1].typ)
   gen_copy_lvalue(module, rhs, tmp, node[1].typ)
 
+proc gen_magic_new(module: BModule; node: PNode): ValueRef =
+  let value = gen_expr(module, node[1])
+  let type_info = gen_type_info(module, node[1].typ)
+  var args: seq[ValueRef]
+  args.add type_info
+  args.add constant_int(module, int get_type_size(module, node[1].typ))
+  discard gen_call_runtime_proc(module, "newObj", args)
+
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
   proc unary(prc: UnaryProc): ValueRef =
@@ -550,6 +558,8 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mMinusSet: result = gen_minus_set(module, node)
   of mSymDiffSet: result = gen_sym_diff_set(module, node)
   of mInSet: result = gen_magic_in_set(module, node)
+  # Heap
+  of mNew: result = gen_magic_new(module, node)
   # strings
   of mLengthStr: result = gen_magic_length_str(module, node)
   of mNewString: result = gen_call_runtime_proc(module, node)
@@ -1150,6 +1160,8 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
       result = alloca
     else:
       result = llvm.buildLoad(module.ll_builder, alloca, "var." & node.sym.name.s)
+  of skType:
+    result = gen_type_info(module, node.sym.typ)
   else:
     echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
 
@@ -1356,7 +1368,7 @@ proc build_cast(module: BModule; value: ValueRef; dst_type: TypeRef): ValueRef =
   elif src_kind == IntegerTypeKind and dst_kind == PointerTypeKind:
     result = llvm.buildIntToPtr(module.ll_builder, value, dst_type, "cast.int_to_ptr")
   elif src_kind == PointerTypeKind and dst_kind == PointerTypeKind:
-    result = llvm.buildPointerCast(module.ll_builder, value, dst_type, "cast.ptr_to_ptr")
+    result = llvm.buildBitCast(module.ll_builder, value, dst_type, "cast.ptr_to_ptr")
   else:
     module.ice("v " & $value & " s " & $src_kind & " d " & $dst_kind)
 

@@ -362,3 +362,16 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   if result == nil: echo "get_type fail: ", typ.kind
   #echo ">>>>> mapped type: ", typ.kind, " ----> ", llvm.getTypeKind(result)
 
+# ------------------------------------------------------------------------------
+
+proc gen_type_info*(module: BModule; typ: PType): ValueRef =
+  let sig = hashType(typ)
+  result = module.get_type_info(sig)
+  if result == nil:
+    echo "☭☭ --------------------------------------------------"
+    echo "☭☭ gen_type_info:   ", typ.kind
+    echo "☭☭ --------------------------------------------------"
+    let nim_type = get_nim_type(module)
+    #echo "TNimType: ", nim_type
+    result = llvm.addGlobal(module.ll_module, nim_type, "rtti")
+    module.add_type_info(sig, result)

@@ -31,6 +31,7 @@ type
     file_name*: AbsoluteFile
     full_file_name*: AbsoluteFile
     init_proc*: ValueRef # the `main` module procedure
+    sig_collisions*: CountTable[SigHash]
     # cache common types
     ll_void*, ll_mem_bool*, ll_bool*: TypeRef
     ll_char*: TypeRef
@@ -48,6 +49,7 @@ type
     # cache for LLVM values and types
     type_cache*: Table[SigHash, TypeRef]
     value_cache*: Table[int, ValueRef]
+    typeinfo_cache*: Table[SigHash, ValueRef] # RTTI
     # llvm stuff
     ll_context*: ContextRef
     ll_module*: ModuleRef
@@ -55,7 +57,9 @@ type
     ll_machine*: TargetMachineRef
     # attributes
     ll_sret*, ll_byval*, ll_zeroext*, ll_signext*: AttributeRef
-    sig_collisions*: CountTable[SigHash]
+    ll_noinline*, ll_noreturn*, ll_nounwind*: AttributeRef
+    ll_uwtable*, ll_inlinehint*, ll_alwaysinline*: AttributeRef
+    ll_norecurse*: AttributeRef
 
   BModuleList* = ref object of RootObj
     modules*: seq[BModule]
@@ -83,6 +87,7 @@ proc newModule*(module_list: BModuleList; module_sym: PSym; config: ConfigRef): 
   result.module_list = module_list
   result.type_cache = init_table[SigHash, TypeRef]()
   result.value_cache = init_table[int, ValueRef]()
+  result.typeinfo_cache = init_table[SigHash, ValueRef]()
   result.file_name = AbsoluteFile toFullPath(config, FileIndex module_sym.position)
   result.sig_collisions = initCountTable[SigHash]()
 
@@ -167,3 +172,9 @@ proc get_value*(module: BModule; sym: PSym): ValueRef =
     if sym.kind == skVar and sfImportc in sym.flags:
       let name = mangle_global_var_name(module, sym)
       result = llvm.getNamedGlobal(module.ll_module, name)
+
+proc add_type_info*(module: BModule; sig: SigHash; typ: ValueRef) =
+  module.type_info_cache.add(sig, typ)
+
+proc get_type_info*(module: BModule; sig: SigHash): ValueRef =
+  module.type_info_cache.get_or_default(sig)
