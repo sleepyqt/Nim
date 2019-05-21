@@ -58,6 +58,8 @@ proc setup_codegen(module: BModule) =
     of cpuAMD64: cpu = "x86-64"; reloc = RelocPIC;     features = "+sse,+sse2"
     else: assert(false, "unsupported CPU")
 
+    module.ehmodel = EHModel.LongJump
+
     triple = select_target_triple(config.target)
     module.abi = select_target_abi(config.target)
 

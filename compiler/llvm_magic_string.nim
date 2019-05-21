@@ -1,17 +1,15 @@
 proc gen_magic_echo(module: BModule; node: PNode) =
-  #for i in 1 ..< node.len:
-  #  let arg_node = node[i]
-  debug node
-
   let brackets = node[1]
 
   if brackets.len == 0:
     discard
   else:
-    echo "brackets type: ", brackets.typ
-    let data = gen_expr(module, brackets)
+    let array_ptr = gen_expr(module, brackets) # [1 x %NimStringDesc*]*
+    var indices = [constant(module, 0i32), constant(module, 0i32)]
+    # get pointer to first element
+    let data_ptr = llvm.buildGEP(module.ll_builder, array_ptr, addr indices[0], 2, "") # %NimStringDesc**
     let length = constant_int(module, brackets.len)
-    let opn_array = build_open_array(module, brackets.typ.elemType, data, length, "echo.params")
+    let opn_array = build_open_array(module, brackets.typ.elemType, data_ptr, length, "echo.params")
     discard gen_call_runtime_proc(module, "echoBinSafe", @[opn_array])
 
 proc gen_magic_length_str(module: BModule; node: PNode): ValueRef =
@@ -82,3 +80,7 @@ proc gen_magic_chr(module: BModule; node: PNode): ValueRef =
   let value = gen_expr(module, node[1])
   let ll_type = get_type(module, node.typ)
   result = llvm.buildTrunc(module.ll_builder, value, ll_type, "magic.chr")
+
+proc gen_magic_con_str_str(module: BModule; node: PNode): ValueRef =
+  debug node
+  assert false

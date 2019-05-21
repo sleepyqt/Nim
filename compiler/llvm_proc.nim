@@ -6,18 +6,21 @@ import ast, types
 import llvm_dll as llvm
 import llvm_data, llvm_type, llvm_expr, llvm_abi, llvm_aux
 
+const spam = false
+
 proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
   result = module.get_value(sym)
   if result == nil:
     #let proc_name = $sym.loc.r
     let proc_name = mangle_proc_name(module, sym)
-    echo "## --------------------------------------------------"
-    echo "## gen_importc_proc : ", sym.name.s, " -> ", proc_name
-    echo "## id               : ", sym.id
-    echo "## flags            : ", sym.flags
-    echo "## loc flags        : ", sym.loc.flags
-    echo "## mangled name     : ", proc_name
-    echo "## --------------------------------------------------"
+    when spam:
+      echo "## --------------------------------------------------"
+      echo "## gen_importc_proc : ", sym.name.s, " -> ", proc_name
+      echo "## id               : ", sym.id
+      echo "## flags            : ", sym.flags
+      echo "## loc flags        : ", sym.loc.flags
+      echo "## mangled name     : ", proc_name
+      echo "## --------------------------------------------------"
     let proc_type = get_proc_type(module, sym.typ)
     result = llvm.addFunction(module.ll_module, proc_name, proc_type)
     llvm.setFunctionCallConv(result, cuint map_call_conv(module, sym.typ.callConv))
@@ -31,14 +34,15 @@ proc gen_proc_prototype*(module: BModule; sym: PSym): ValueRef =
     let proc_type  = get_proc_type(module, sym.typ)
     let proc_name  = mangle_proc_name(module, sym)
     let proc_val   = llvm.addFunction(module.ll_module, proc_name, proc_type)
-    echo "♥♥ --------------------------------------------------"
-    echo "♥♥ gen proc proto   : ", sym.name.s
-    echo "♥♥ id               : ", sym.id
-    echo "♥♥ type             : ", proc_type
-    echo "♥♥ flags            : ", sym.flags
-    echo "♥♥ loc flags        : ", sym.loc.flags
-    echo "♥♥ mangled name     : ", proc_name
-    echo "♥♥ --------------------------------------------------"
+    when spam:
+      echo "♥♥ --------------------------------------------------"
+      echo "♥♥ gen proc proto   : ", sym.name.s
+      echo "♥♥ id               : ", sym.id
+      echo "♥♥ type             : ", proc_type
+      echo "♥♥ flags            : ", sym.flags
+      echo "♥♥ loc flags        : ", sym.loc.flags
+      echo "♥♥ mangled name     : ", proc_name
+      echo "♥♥ --------------------------------------------------"
     llvm.setFunctionCallConv(proc_val, cuint map_call_conv(module, sym.typ.callConv))
     module.add_value(sym, proc_val)
     result = proc_val
@@ -48,15 +52,16 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
   if result == nil:
     let proc_name  = mangle_proc_name(module, sym)
 
-    echo "** --------------------------------------------------"
-    echo "** generate proc    : ", sym.name.s
-    echo "** id               : ", sym.id
-    echo "** flags            : ", sym.flags
-    echo "** loc kind         : ", sym.loc.k
-    echo "** loc flags        : ", sym.loc.flags
-    echo "** call conv        : ", sym.typ.callConv
-    echo "** mangled name     : ", proc_name
-    echo "** --------------------------------------------------"
+    when spam:
+      echo "** --------------------------------------------------"
+      echo "** generate proc    : ", sym.name.s
+      echo "** id               : ", sym.id
+      echo "** flags            : ", sym.flags
+      echo "** loc kind         : ", sym.loc.k
+      echo "** loc flags        : ", sym.loc.flags
+      echo "** call conv        : ", sym.typ.callConv
+      echo "** mangled name     : ", proc_name
+      echo "** --------------------------------------------------"
 
     #debug sym.ast
 
@@ -140,7 +145,8 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
     for ast_param in sym.typ.n.sons[1 .. ^1]:
       let arg_info = abi.classify_argument_type(module, ast_param.typ)
 
-      echo "** param: ", ast_param.sym.name.s, ", type: ", ast_param.typ.kind, ", class: ", arg_info.class
+      when spam:
+        echo "** param: ", ast_param.sym.name.s, ", type: ", ast_param.typ.kind, ", class: ", arg_info.class
 
       case arg_info.class
 
@@ -201,7 +207,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
         let data = llvm.getParam(proc_val, cuint ir_param_index + 0)
         let length = llvm.getParam(proc_val, cuint ir_param_index + 1)
         let name = "param." & ast_param.sym.name.s
-        let local_adr = build_open_array(module, ast_param.typ, data, length, name)
+        let local_adr = build_open_array(module, ast_param.typ.elemType, data, length, name)
         module.add_value(ast_param.sym, local_adr)
         inc ir_param_index, 2
 
@@ -273,6 +279,20 @@ proc gen_proc*(module: BModule; sym: PSym): ValueRef =
     result = gen_proc_prototype(module, sym)
 
 # ------------------------------------------------------------------------------
+
+proc call_or_invoke(module: BModule; fn: ValueRef; args: ptr ValueRef; numArgs: cuint; name: cstring): ValueRef =
+  let try_scope = module.try_scope()
+  if try_scope != nil and module.ehmodel != EHModel.LongJump:
+    let entry_bb = llvm.getInsertBlock(module.ll_builder)
+    let fun = llvm.getBasicBlockParent(entry_bb)
+    let then_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "invoke.then")
+    let catch_bb = try_scope.unwind_target
+    llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+    result = llvm.buildInvoke(module.ll_builder, fn, args, numArgs, then_bb, catch_bb, name)
+    llvm.moveBasicBlockAfter(then_bb, entry_bb)
+    llvm.positionBuilderAtEnd(module.ll_builder, then_bb)
+  else:
+    result = llvm.buildCall(module.ll_builder, fn, args, numArgs, name)
 
 proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: seq[ValueRef];
                                                                      arguments_types: seq[PType]): ValueRef =
@@ -367,21 +387,21 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
   let args_addr = if ll_args.len == 0: nil else: addr ll_args[0]
 
   if ret_type == nil:
-    let call = llvm.buildCall(module.ll_builder, callee, args_addr, cuint len ll_args, "")
+    let call = call_or_invoke(module, callee, args_addr, cuint len ll_args, "")
     llvm.setInstructionCallConv(call, cc)
   else:
     case ret_info.class
     of ArgClass.Direct:
-      result = llvm.buildCall(module.ll_builder, callee, args_addr, cuint len ll_args, "")
+      result = call_or_invoke(module, callee, args_addr, cuint len ll_args, "")
       llvm.setInstructionCallConv(result, cc)
       if ret_type != nil and ret_type.kind == tyBool:
         result = llvm.buildZExt(module.ll_builder, result, module.ll_mem_bool, "")
     of ArgClass.Indirect:
-      let call = llvm.buildCall(module.ll_builder, callee, args_addr, cuint len ll_args, "")
+      let call = call_or_invoke(module, callee, args_addr, cuint len ll_args, "")
       llvm.setInstructionCallConv(call, cc)
     of ArgClass.Expand:
       if ExpandToWords in ret_info.flags:
-        let call         = llvm.buildCall(module.ll_builder, callee, args_addr, cuint len ll_args, "")
+        let call         = call_or_invoke(module, callee, args_addr, cuint len ll_args, "")
         llvm.setInstructionCallConv(call, cc)
         var expanded     = expand_struct_to_words(module, ret_type)
         let bitcast_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool 0)
@@ -401,11 +421,13 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
 
 proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
   let cc = node[0].sym.typ.callConv
-  echo "++ --------------------------------------------------"
-  echo "++ gen_call_expr    : ", node[0].sym.name.s, " ", node.kind
-  echo "++ sym.flags        : ", node[0].sym.flags
-  echo "++ call conv        : ", cc
-  echo "++ --------------------------------------------------"
+
+  when spam:
+    echo "++ --------------------------------------------------"
+    echo "++ gen_call_expr    : ", node[0].sym.name.s, " ", node.kind
+    echo "++ sym.flags        : ", node[0].sym.flags
+    echo "++ call conv        : ", cc
+    echo "++ --------------------------------------------------"
 
   var arguments: seq[ValueRef]
   var arguments_types: seq[PType]
@@ -447,3 +469,12 @@ proc gen_call_runtime_proc*(module: BModule; node: PNode): ValueRef =
     discard gen_proc(module, sym)
 
   result = gen_call_expr(module, node)
+
+# ------------------------------------------------------------------------------
+
+proc get_eh_personality_proc*(module: BModule): ValueRef =
+  if module.ehprocs.personality == nil:
+    let sym = module.module_list.graph.getCompilerProc("nim_eh_personality")
+    if sym == nil: module.ice("nim_eh_personality missing")
+    module.ehprocs.personality = gen_proc(module, sym)
+    result = module.ehprocs.personality

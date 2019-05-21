@@ -127,6 +127,9 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
   of tyFloat32, tyFloat64, tyFloat:
     result.class = Direct
 
+  of tyEnum:
+    result.class = Direct
+
   of tyChar:
     result.class = Direct
 
@@ -173,6 +176,9 @@ method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType):
     result.class = Direct
 
   of tyFloat32, tyFloat64, tyFloat:
+    result.class = Direct
+
+  of tyEnum:
     result.class = Direct
 
   of tyChar:

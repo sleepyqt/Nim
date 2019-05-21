@@ -19,12 +19,21 @@ type
     parent*: BScope
     proc_val*: ValueRef
     break_target*: BasicBlockRef # target for break statement
-    break_name*: int # target for named break
+    break_name*: int # target for named break (symbol id)
     unwind_target*: BasicBlockRef
-    return_target*: BasicBlockRef
+    return_target*: BasicBlockRef # target for return statement
+
+  EHProcs = object
+    personality*: ValueRef
+
+  EHModel* = enum
+    LongJump
+    WindowsSEH
+    Itanium
 
   BModule* = ref object of PPassContext
     abi*: PlatformABI
+    ehmodel*: EHModel
     module_sym*: PSym
     top_scope*: BScope
     module_list*: BModuleList
@@ -32,6 +41,7 @@ type
     full_file_name*: AbsoluteFile
     init_proc*: ValueRef # the `main` module procedure
     sig_collisions*: CountTable[SigHash]
+    ehprocs*: EHProcs
     # cache common types
     ll_void*, ll_mem_bool*, ll_bool*: TypeRef
     ll_char*: TypeRef
@@ -148,6 +158,11 @@ iterator lookup*(module: BModule): BScope =
 proc proc_scope*(module: BModule): BScope =
   for scope in module.lookup():
     if scope.proc_val != nil:
+      return scope
+
+proc try_scope*(module: BModule): BScope =
+  for scope in module.lookup():
+    if scope.unwind_target != nil:
       return scope
 
 # Symbol Table -----------------------------------------------------------------

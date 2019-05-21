@@ -159,14 +159,15 @@ proc build_entry_alloca*(module: BModule; typ: TypeRef; name: cstring): ValueRef
   # restore position
   llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
 
-proc build_open_array*(module: BModule; elem_type: PType; data: ValueRef; length: ValueRef; name: string): ValueRef =
-  var struct_fields = [get_type(module, elem_type), module.ll_int]
-  let ll_type = llvm.structTypeInContext(module.ll_context, addr struct_fields[0], 2, Bool 0)
-  result = build_entry_alloca(module, ll_type, name)
-  let field0 = build_field_ptr(module, result, constant(module, 0i32))
-  let field1 = build_field_ptr(module, result, constant(module, 1i32))
-  discard llvm.buildStore(module.ll_builder, data, field0)
-  discard llvm.buildStore(module.ll_builder, length, field1)
+proc build_open_array*(module: BModule; ptr_T: PType; data_ptr: ValueRef; length: ValueRef; name: string): ValueRef =
+  let ll_ptr_T = type_to_ptr get_type(module, ptr_T)
+  var struct_fields = [ll_ptr_T, module.ll_int]
+  let ll_type = llvm.structTypeInContext(module.ll_context, addr struct_fields[0], 2, Bool 0) # {T*, i64}
+  result = build_entry_alloca(module, ll_type, name) # {T*, i64}*
+  let field0 = build_field_ptr(module, result, constant(module, 0i32)) # T**
+  let field1 = build_field_ptr(module, result, constant(module, 1i32)) # i64*
+  discard llvm.buildStore(module.ll_builder, data_ptr, field0) # T* -> T*
+  discard llvm.buildStore(module.ll_builder, length, field1) # i64 -> i64
 
 # ------------------------------------------------------------------------------
 
