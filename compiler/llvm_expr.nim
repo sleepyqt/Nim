@@ -92,6 +92,11 @@ proc gen_copy_lvalue(module: BModule; dst, adr: ValueRef; typ: PType) =
   else:
     assert false, $typ.kind
 
+proc gen_ref_copy(module: BModule; dst, adr: ValueRef) =
+  assert_value_type(dst, PointerTypeKind)
+  assert_value_type(adr, PointerTypeKind)
+  discard llvm.buildStore(module.ll_builder, adr, dst)
+
 proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef) =
   assert typ != nil
   assert alloca != nil
@@ -247,10 +252,11 @@ proc gen_str_lit(module: BModule; node: PNode): ValueRef =
 
     let initializer = llvm.constStringInContext(module.ll_context, node.strVal, cuint len node.strVal, Bool 0)
     let global = llvm.addGlobal(module.ll_module, typ, "literal.cstring")
-    llvm.setInitializer(global, initializer)
 
     var indices = [constant(module, 0i32), constant(module, 0i32)]
     result = llvm.buildGEP(module.ll_builder, global, addr indices[0], cuint len indices, "")
+
+    llvm.setInitializer(global, initializer)
     llvm.setGlobalConstant(global, Bool 1)
     llvm.setLinkage(global, PrivateLinkage)
   elif node.typ.kind == tyString:
@@ -265,6 +271,8 @@ proc gen_str_lit(module: BModule; node: PNode): ValueRef =
     let initializer = llvm.constStructInContext(module.ll_context, addr nim_str_fields[0], 2, Bool 0)
     let global = llvm.addGlobal(module.ll_module, llvm.typeOf(initializer), "literal.string")
     llvm.setInitializer(global, initializer)
+    llvm.setGlobalConstant(global, Bool 1)
+    llvm.setLinkage(global, PrivateLinkage)
 
     result = llvm.buildBitCast(module.ll_builder, global, get_nim_string_type(module), "")
   else:
@@ -375,12 +383,17 @@ proc gen_magic_swap(module: BModule; node: PNode): ValueRef =
   gen_copy_lvalue(module, rhs, tmp, node[1].typ)
 
 proc gen_magic_new(module: BModule; node: PNode): ValueRef =
-  let value = gen_expr(module, node[1])
+  let dest_adr = gen_expr_lvalue(module, node[1])
+  assert_value_type(dest_adr, PointerTypeKind)
   let type_info = gen_type_info(module, node[1].typ)
   var args: seq[ValueRef]
   args.add type_info
   args.add constant_int(module, int get_type_size(module, node[1].typ))
-  discard gen_call_runtime_proc(module, "newObj", args)
+  let allocated_ptr = gen_call_runtime_proc(module, "newObj", args)
+  let ref_cast_type = get_type(module, node[1].typ)
+  let ref_cast = llvm.buildBitCast(module.ll_builder, allocated_ptr, ref_cast_type, "ref_cast")
+  gen_ref_copy(module, dest_adr, ref_cast)
+  result = dest_adr
 
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
@@ -556,6 +569,8 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mInSet: result = gen_magic_in_set(module, node)
   # Heap
   of mNew: result = gen_magic_new(module, node)
+  # seq
+  of mLengthSeq: result = gen_magic_length_seq(module, node)
   # strings
   of mLengthStr: result = gen_magic_length_str(module, node)
   of mNewString: result = gen_call_runtime_proc(module, node)
@@ -579,7 +594,7 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mBoolToStr: result = gen_magic_bool_to_str(module, node)
   of mCharToStr: result = gen_magic_char_to_str(module, node)
   of mFloatToStr: result = gen_magic_float_to_str(module, node)
-  # of mCStrToStr:
+  of mCStrToStr: result = gen_magic_cstr_to_str(module, node)
   # of mStrToStr:
   # of mEnumToStr:
   else: echo "unknown magic: ", op
@@ -754,7 +769,10 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
     result = llvm.buildGEP(module.ll_builder, data, addr indices[0], cuint len indices, "string.[]")
     # i8*
   of tySequence:
-    assert false
+    let struct = llvm.buildLoad(module.ll_builder, lhs, "")
+    let data = build_field_ptr(module, struct, constant(module, int32 1), "seq.data.ptr")
+    var indices = [constant_int(module, 0), rhs]
+    result = llvm.buildGEP(module.ll_builder, data, addr indices[0], cuint len indices, "seq.[]")
   of tyTuple:
     # {i64, i64, i64}**
     let struct = llvm.buildLoad(module.ll_builder, lhs, "")

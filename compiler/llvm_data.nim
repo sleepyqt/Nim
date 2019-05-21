@@ -56,6 +56,7 @@ type
     # intrisics
     ll_memcpy32*, ll_memcpy64*: TypeRef
     ll_memset32*, ll_memset64*: TypeRef
+    ll_setjmp*, ll_longjmp*: TypeRef
     # cache for LLVM values and types
     type_cache*: Table[SigHash, TypeRef]
     value_cache*: Table[int, ValueRef]

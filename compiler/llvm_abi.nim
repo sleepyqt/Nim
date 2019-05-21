@@ -133,7 +133,7 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
   of tyChar:
     result.class = Direct
 
-  of tyCString, tyPtr, tyPointer, tyVar, tyRef, tyString:
+  of tyCString, tyPtr, tyPointer, tyVar, tyRef, tyString, tySequence:
     result.class = Direct
 
   of tyBool:
@@ -184,7 +184,7 @@ method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType):
   of tyChar:
     result.class = Direct
 
-  of tyCString, tyPtr, tyPointer, tyVar, tyRef, tyString:
+  of tyCString, tyPtr, tyPointer, tyVar, tyRef, tyString, tySequence:
     result.class = Direct
 
   of tyBool:

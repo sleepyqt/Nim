@@ -420,12 +420,13 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
     # end case
 
 proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
-  let cc = node[0].sym.typ.callConv
+  let cc = node[0].typ.callConv
 
   when spam:
+    let sym = if node[0].kind == nkHiddenDeref: node[0][0].sym else: node[0].sym
     echo "++ --------------------------------------------------"
-    echo "++ gen_call_expr    : ", node[0].sym.name.s, " ", node.kind
-    echo "++ sym.flags        : ", node[0].sym.flags
+    echo "++ gen_call_expr    : ", sym.name.s, " ", node.kind
+    echo "++ sym.flags        : ", sym.flags
     echo "++ call conv        : ", cc
     echo "++ --------------------------------------------------"
 
@@ -440,7 +441,7 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
     arguments.add(value)
     arguments_types.add(arg.typ)
 
-  result = build_call(module, node[0].sym.typ, callee, arguments, arguments_types)
+  result = build_call(module, node[0].typ, callee, arguments, arguments_types)
 
 # ------------------------------------------------------------------------------
 
@@ -454,6 +455,8 @@ proc gen_call_runtime_proc*(module: BModule; name: string; arguments: seq[ValueR
   var arguments_types: seq[PType] = sym.typ.sons[1 .. ^1]
   let proc_type = sym.typ
   let callee = gen_proc(module, sym)
+
+  assert arguments.len == arguments_types.len
 
   result = build_call(module, proc_type, callee, arguments, arguments_types)
 

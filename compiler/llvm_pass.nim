@@ -140,25 +140,42 @@ proc setup_cache(module: BModule) =
     returnType = module.ll_void,
     paramTypes = addr args_memcpy32[0],
     paramCount = cuint len args_memcpy32,
-    isVarArg = Bool 0)
+    isVarArg   = Bool 0)
   var args_memcpy64 = [module.ll_pointer, module.ll_pointer, module.ll_int64, module.ll_bool]
   module.ll_memcpy64 = llvm.functionType(
     returnType = module.ll_void,
     paramTypes = addr args_memcpy64[0],
     paramCount = cuint len args_memcpy64,
-    isVarArg = Bool 0)
+    isVarArg   = Bool 0)
   var args_memset32 = [module.ll_pointer, module.ll_int8, module.ll_int32, module.ll_bool]
   module.ll_memset32 = llvm.functionType(
     returnType = module.ll_void,
     paramTypes = addr args_memset32[0],
     paramCount = cuint len args_memset32,
-    isVarArg = Bool 0)
+    isVarArg   = Bool 0)
   var args_memset64 = [module.ll_pointer, module.ll_int8, module.ll_int64, module.ll_bool]
   module.ll_memset64 = llvm.functionType(
     returnType = module.ll_void,
     paramTypes = addr args_memset64[0],
     paramCount = cuint len args_memset64,
-    isVarArg = Bool 0)
+    isVarArg   = Bool 0)
+  var args_setjmp = [module.ll_pointer]
+  module.ll_setjmp = llvm.functionType(
+    returnType = module.ll_int32,
+    paramTypes = addr args_setjmp[0],
+    paramCount = cuint len args_setjmp,
+    isVarArg   = Bool 0)
+  var args_longjmp = [module.ll_pointer]
+  module.ll_longjmp = llvm.functionType(
+    returnType = module.ll_void,
+    paramTypes = addr args_longjmp[0],
+    paramCount = cuint len args_longjmp,
+    isVarArg   = Bool 0)
+
+  # i32 @llvm.eh.sjlj.setjmp(i8* %setjmp_buf)
+  # void @llvm.eh.sjlj.longjmp(i8* %setjmp_buf)
+  # i8* @llvm.eh.sjlj.lsda()
+  # void @llvm.eh.sjlj.callsite(i32 %call_site_num)
 
   # attributes
 
@@ -299,9 +316,9 @@ proc run_verify_pass(module: BModule): bool =
 proc run_opt_speed_pass(module: BModule) =
   let pm = llvm.createPassManager()
   llvm.addPromoteMemoryToRegisterPass(pm)
-  llvm.addInstructionCombiningPass(pm)
-  llvm.addReassociatePass(pm)
-  llvm.addNewGVNPass(pm)
+  #llvm.addInstructionCombiningPass(pm)
+  #llvm.addReassociatePass(pm)
+  #llvm.addNewGVNPass(pm)
   llvm.addCFGSimplificationPass(pm)
   discard llvm.runPassManager(pm, module.ll_module)
 

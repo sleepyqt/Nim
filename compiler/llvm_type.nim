@@ -26,6 +26,11 @@ proc type_to_ptr*(value: TypeRef): TypeRef =
 proc live_as_pointer*(module: BModule; typ: PType): bool =
   result = typ.kind in {tyObject, tyArray, tyTuple, tyOpenArray}
 
+proc get_runtime_type*(module: BModule; name: string): TypeRef =
+  let sym = getCompilerProc(module.module_list.graph, name)
+  if sym == nil: module.ice(name & " missing")
+  result = get_type(module, sym.typ)
+
 # ------------------------------------------------------------------------------
 
 proc expand_struct*(module: BModule; struct: TypeRef): seq[TypeRef] =
@@ -67,9 +72,7 @@ import llvm_abi
 proc get_generic_seq_type*(module: BModule): TypeRef =
   result = module.ll_generic_seq
   if result == nil:
-    let sym = getCompilerProc(module.module_list.graph, "TGenericSeq")
-    if sym == nil: module.ice("TGenericSeq missing")
-    module.ll_generic_seq = get_type(module, sym.typ)
+    module.ll_generic_seq = get_runtime_type(module, "TGenericSeq")
     result = module.ll_generic_seq
 
 proc get_array_type(module: BModule; typ: PType): TypeRef =
@@ -90,14 +93,16 @@ proc get_seq_type(module: BModule; typ: PType): TypeRef =
   if result == nil:
     #let name = typ.sym.name.s
     #debug typ
-    result = llvm.structCreateNamed(module.ll_context, "seq")
+    let struct = llvm.structCreateNamed(module.ll_context, "seq")
 
     let header = get_generic_seq_type(module)
     let elem_type = llvm.arrayType(get_type(module, elemType(typ)), 0)
 
     var fields = [ header, elem_type ]
 
-    llvm.structSetBody(result, addr fields[0], cuint fields.len, 0)
+    llvm.structSetBody(struct, addr fields[0], cuint fields.len, 0)
+
+    result = type_to_ptr struct
 
     module.add_type(sig, result)
 
@@ -111,9 +116,7 @@ proc get_unchecked_array_type(module: BModule; typ: PType): TypeRef =
 proc get_nim_type(module: BModule): TypeRef =
   result = module.ll_nim_type
   if result == nil:
-    let sym = getCompilerProc(module.module_list.graph, "TNimType")
-    if sym == nil: module.ice("TNimType missing")
-    module.ll_nim_type = get_type(module, sym.typ)
+    module.ll_nim_type = get_runtime_type(module, "TNimType")
     result = module.ll_nim_type
 
 proc rec_list_size_align(module: BModule; node: PNode): tuple[size, align: BiggestInt] =
@@ -212,9 +215,7 @@ proc get_cstring_type*(module: BModule; typ: PType): TypeRef =
 proc get_nim_string_type*(module: BModule): TypeRef =
   result = module.ll_nim_string
   if result == nil:
-    let sym = getCompilerProc(module.module_list.graph, "NimStringDesc")
-    if sym == nil: module.ice("NimStringDesc missing")
-    module.ll_nim_string = type_to_ptr get_type(module, sym.typ)
+    module.ll_nim_string = type_to_ptr get_runtime_type(module, "NimStringDesc")
     result = module.ll_nim_string
 
 # Procedure Types --------------------------------------------------------------
@@ -373,5 +374,13 @@ proc gen_type_info*(module: BModule; typ: PType): ValueRef =
     echo "☭☭ --------------------------------------------------"
     let nim_type = get_nim_type(module)
     #echo "TNimType: ", nim_type
+
+    let initializer = llvm.constNull(nim_type)
+
     result = llvm.addGlobal(module.ll_module, nim_type, "rtti")
+
+    llvm.setInitializer(result, initializer)
+    llvm.setGlobalConstant(result, Bool 1)
+    llvm.setLinkage(result, PrivateLinkage)
+
     module.add_type_info(sig, result)

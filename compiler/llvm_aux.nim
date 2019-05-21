@@ -74,6 +74,9 @@ proc constant_true*(module: BModule): ValueRef =
 proc constant_false*(module: BModule): ValueRef =
   result = llvm.constInt(module.ll_bool, culonglong 0, Bool 0)
 
+proc constant_nil*(module: BModule): ValueRef =
+  result = llvm.constNull(module.ll_pointer)
+
 # ------------------------------------------------------------------------------
 
 proc build_generic_cmp*(module: BModule; pred: string; lhs, rhs: ValueRef; typ: PType): ValueRef =
@@ -311,6 +314,16 @@ proc build_call_memset*(module: BModule; dst: ValueRef; val: int8; len: int64) =
     var args = [ dst, constant(module, val), constant(module, int32 len), constant_false(module) ]
     discard call_intrisic(module, "llvm.memset.p0i8.i32", module.ll_memset32, args)
   else: assert(false)
+
+proc build_call_setjmp*(module: BModule; buff: ValueRef): ValueRef =
+  assert_value_type(buff, PointerTypeKind)
+  var args = [ buff ]
+  result = call_intrisic(module, "llvm.eh.sjlj.setjmp", module.ll_setjmp, args)
+
+proc build_call_longjmp*(module: BModule; buff: ValueRef) =
+  assert_value_type(buff, PointerTypeKind)
+  var args = [buff]
+  discard call_intrisic(module, "llvm.eh.sjlj.longjmp", module.ll_longjmp, args)
 
 # ------------------------------------------------------------------------------
 

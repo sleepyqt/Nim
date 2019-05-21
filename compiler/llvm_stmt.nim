@@ -322,27 +322,133 @@ proc gen_block(module: BModule; node: PNode): ValueRef =
 
   module.close_scope()
 
+proc gen_stmt_list_expr(module: BModule; node: PNode): ValueRef =
+  for i in 0 .. node.len - 2:
+    gen_stmt(module, node[i])
+  result = gen_expr(module, node.lastSon)
+
 # ------------------------------------------------------------------------------
 
 proc build_try_longjump(module: BModule; node: PNode) =
+  #[
+
+  try:
+    echo "1"
+    echo "2"
+  except ValueError:
+    echo "v"
+  except IOError:
+    echo "i"
+  finally:
+    echo "f"
+
+    safe_point: TSafePoint
+    ....
+  entry:
+    pushSafePoint(safe_point)
+    safe_point.status = setjmp(safe_point.context)
+    br safe_point.status == 0 try.if.then try.if.else
+  try.if.then:
+    echo "1"
+    echo "2"
+    popSafePoint()
+    br try.finally
+  try.if.else:
+    popSafePoint()
+    br try.finally
+  try.finally:
+    echo "f"
+    br safe_point.status != 0 try.reraise try.cont
+  try.reraise:
+    reraiseException()
+    br try.cont
+  try.cont
+    ....
+  ]#
+
+
   module.open_scope()
 
   let entry_bb = llvm.getInsertBlock(module.ll_builder)
   let fun = llvm.getBasicBlockParent(entry_bb)
   let proc_scope = module.proc_scope()
 
-  #llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  let then_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "try.if.then")
+  let else_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "try.if.else")
+  let finally_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "try.finally")
+  let reraise_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "try.reraise")
+  let cont_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "try.cont")
 
-  let try_block_value = gen_expr(module, node[0])
+  llvm.moveBasicBlockAfter(then_bb, entry_bb)
+  llvm.moveBasicBlockAfter(else_bb, then_bb)
+  llvm.moveBasicBlockAfter(finally_bb, else_bb)
+  llvm.moveBasicBlockAfter(reraise_bb, finally_bb)
+  llvm.moveBasicBlockAfter(cont_bb, reraise_bb)
+
+  # entry:
+  let safe_point_type = get_runtime_type(module, "TSafePoint")
+  let safe_point = build_entry_alloca(module, safe_point_type, "safe_point")
+  let status_adr = build_field_ptr(module, safe_point, constant(module, int32 1)) # i64*
+  let context_adr = build_field_ptr(module, safe_point, constant(module, int32 2)) # [N x i64]*
+  discard gen_call_runtime_proc(module, "pushSafePoint", @[safe_point])
+
+  echo "S ", llvm.typeOf(status_adr)
+  echo "C ", llvm.typeOf(context_adr)
+
+  var indices = [constant_int(module, 0), constant_int(module, 0)]
+  #let first_elem = llvm.buildGEP(module.ll_builder, context_adr, addr indices[0], cuint len indices, "")
+  let buff = llvm.buildBitCast(module.ll_builder, context_adr, module.ll_pointer, "try.context")
+
+  let status = build_call_setjmp(module, buff)
+
+  discard llvm.buildStore(
+    module.ll_builder,
+    llvm.buildSExt(module.ll_builder, status, module.ll_int, ""), status_adr)
+
+  let cond1 = llvm.buildICmp(module.ll_builder,
+    IntEQ,
+    llvm.buildLoad(module.ll_builder, status_adr, "safe_point.status"),
+    constant_int(module, 0),
+    "")
+  discard llvm.buildCondBr(module.ll_builder, cond1, then_bb, else_bb)
+
+  # try.if.then:
+  llvm.positionBuilderAtEnd(module.ll_builder, then_bb)
+  let try_code = gen_expr(module, node[0])
+  discard gen_call_runtime_proc(module, "popSafePoint", @[])
+  discard llvm.buildBr(module.ll_builder, finally_bb)
+
+  # try.if.else:
+  llvm.positionBuilderAtEnd(module.ll_builder, else_bb)
+  discard gen_call_runtime_proc(module, "popSafePoint", @[])
 
   for son in node:
-    echo "> kind: ", son.kind
     if son.kind == nkExceptBranch:
-      discard
-    elif son.kind == nkFinally:
-      discard
-    else:
-      discard
+      discard # todo
+
+  discard llvm.buildBr(module.ll_builder, finally_bb)
+
+  # try.finally
+  llvm.positionBuilderAtEnd(module.ll_builder, finally_bb)
+
+  for son in node:
+    if son.kind == nkFinally:
+      let finally_code = gen_expr(module, son[0])
+
+  let cond2 = llvm.buildICmp(module.ll_builder,
+    IntNE,
+    llvm.buildLoad(module.ll_builder, status_adr, "safe_point.status"),
+    constant_int(module, 0),
+    "")
+  discard llvm.buildCondBr(module.ll_builder, cond1, reraise_bb, cont_bb)
+
+  # try.reraise
+  llvm.positionBuilderAtEnd(module.ll_builder, reraise_bb)
+  discard gen_call_runtime_proc(module, "reraiseException", @[])
+  discard llvm.buildBr(module.ll_builder, cont_bb)
+
+  # try.cont
+  llvm.positionBuilderAtEnd(module.ll_builder, cont_bb)
 
   module.close_scope()
 
@@ -522,7 +628,3 @@ proc gen_case_stmt(module: BModule; node: PNode) =
 
 # ------------------------------------------------------------------------------
 
-proc gen_stmt_list_expr(module: BModule; node: PNode): ValueRef =
-  for i in 0 .. node.len - 2:
-    gen_stmt(module, node[i])
-  result = gen_expr(module, node.lastSon)
