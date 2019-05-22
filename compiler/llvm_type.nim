@@ -5,9 +5,19 @@ from sighashes import hashType
 from magicsys import getCompilerProc
 from astalgo import debug
 
+const spam = false
+
 proc get_type*(module: BModule; typ: PType): TypeRef
 
 # ------------------------------------------------------------------------------
+
+proc `$`*(x: TypeRef): string =
+  if x == nil:
+    result = "nil TypeRef"
+  else:
+    let str = llvm.printTypeToString(x)
+    result = $str
+    disposeMessage(str)
 
 proc is_signed_type*(typ: PType): bool =
   typ.kind in {tyInt .. tyInt64}
@@ -113,7 +123,7 @@ proc get_unchecked_array_type(module: BModule; typ: PType): TypeRef =
 
 # Object Type ------------------------------------------------------------------
 
-proc get_nim_type(module: BModule): TypeRef =
+proc get_rtti_nim_type(module: BModule): TypeRef =
   result = module.ll_nim_type
   if result == nil:
     module.ll_nim_type = get_runtime_type(module, "TNimType")
@@ -134,6 +144,8 @@ proc rec_list_size_align(module: BModule; node: PNode): tuple[size, align: Bigge
   # todo: no support for nested case objects yet
 
 proc gen_object_fields(module: BModule; fields: var seq[TypeRef]; node: PNode) =
+  assert node != nil
+
   case node.kind:
   of nkRecList:
     # list of fields
@@ -167,10 +179,20 @@ proc gen_object_fields(module: BModule; fields: var seq[TypeRef]; node: PNode) =
     discard
 
 proc get_object_type(module: BModule; typ: PType): TypeRef =
+  assert typ != nil
+
+  let typ = skipTypes(typ, abstractPtrs)
+
+  assert typ.kind == tyObject
+
   let sig = hashType(typ)
   result = module.get_type(sig)
   if result == nil:
     let name = typ.sym.name.s
+    when spam:
+      echo "== --------------------------------------------------"
+      echo "== get_object_type: ", name
+
     result = llvm.structCreateNamed(module.ll_context, name)
     module.add_type(sig, result)
 
@@ -178,12 +200,16 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
     let align = get_type_align(module, typ)
     let super = if typ.sons.len == 0: nil else: typ[0]
 
+    when spam:
+      echo "== size: ", size, ", align: ", align, ", super: ", super != nil
+      echo "== flags: ", if typ.sym != nil: $typ.sym.flags else: "nil"
+
     var fields: seq[TypeRef]
     if super == nil:
       if (typ.sym != nil and sfPure in typ.sym.flags) or (tfFinal in typ.flags):
         discard
       else:
-        fields.add type_to_ptr get_nim_type(module)
+        fields.add type_to_ptr get_rtti_nim_type(module)
     else:
       fields.add get_object_type(module, super)
 
@@ -194,6 +220,10 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
 
     let fields_ptr = if fields.len == 0: nil else: addr fields[0]
     llvm.structSetBody(result, fields_ptr, cuint fields.len, 0)
+
+    when spam:
+      echo "== result: ", result
+      echo "== --------------------------------------------------"
 
 proc get_object_case_branch_type*(module: BModule; node: PNode): TypeRef =
   var fields: seq[TypeRef]
@@ -372,7 +402,7 @@ proc gen_type_info*(module: BModule; typ: PType): ValueRef =
     echo "☭☭ --------------------------------------------------"
     echo "☭☭ gen_type_info:   ", typ.kind
     echo "☭☭ --------------------------------------------------"
-    let nim_type = get_nim_type(module)
+    let nim_type = get_rtti_nim_type(module)
     #echo "TNimType: ", nim_type
 
     let initializer = llvm.constNull(nim_type)

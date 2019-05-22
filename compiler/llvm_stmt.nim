@@ -440,7 +440,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
     llvm.buildLoad(module.ll_builder, status_adr, "safe_point.status"),
     constant_int(module, 0),
     "")
-  discard llvm.buildCondBr(module.ll_builder, cond1, reraise_bb, cont_bb)
+  discard llvm.buildCondBr(module.ll_builder, cond2, reraise_bb, cont_bb)
 
   # try.reraise
   llvm.positionBuilderAtEnd(module.ll_builder, reraise_bb)
@@ -453,7 +453,23 @@ proc build_try_longjump(module: BModule; node: PNode) =
   module.close_scope()
 
 proc build_raise_longjump(module: BModule; node: PNode) =
-  discard
+  echo "build_raise_longjump:"
+  # todo: cgen does something weird here
+  if node[0].kind == nkEmpty:
+    discard gen_call_runtime_proc(module, "reraiseException", @[])
+  else:
+    let typ = node[0].typ
+    let cast_ty = type_to_ptr get_runtime_type(module, "Exception")
+    let exception = gen_expr(module, node[0])
+    let cast_exception = llvm.buildBitCast(module.ll_builder, exception, cast_ty, "")
+    echo "exception: ", exception
+    echo "kind: ", typ.kind
+    echo "cast type: ", cast_ty
+    echo "ty: ", llvm.typeOf(exception)
+    # echo "name: ", typ.sym.name.s ! crashes
+    let name = build_cstring_lit(module, "typ.sym.name.s")
+    echo "name: ", name
+    discard gen_call_runtime_proc(module, "raiseException", @[cast_exception, name])
 
 # ------------------------------------------------------------------------------
 

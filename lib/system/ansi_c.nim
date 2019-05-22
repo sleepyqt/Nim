@@ -32,14 +32,20 @@ proc c_strlen*(a: cstring): csize {.
 proc c_abort*() {.
   importc: "abort", header: "<stdlib.h>", noSideEffect.}
 
+when defined(LLVM):
 
-when defined(linux) and defined(amd64):
-  type
-    C_JmpBuf* {.importc: "jmp_buf", header: "<setjmp.h>", bycopy.} = object
-        abi: array[200 div sizeof(clong), clong]
+  when defined(linux) and defined(amd64):
+    type C_JmpBuf* = array[200 div sizeof(clong), clong]
+
 else:
-  type
-    C_JmpBuf* {.importc: "jmp_buf", header: "<setjmp.h>".} = object
+
+  when defined(linux) and defined(amd64):
+    type
+      C_JmpBuf* {.importc: "jmp_buf", header: "<setjmp.h>", bycopy.} = object
+        abi: array[200 div sizeof(clong), clong]
+  else:
+    type
+      C_JmpBuf* {.importc: "jmp_buf", header: "<setjmp.h>".} = object
 
 
 when defined(windows):

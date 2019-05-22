@@ -46,6 +46,19 @@ proc build_nim_seq_len(module: BModule; struct: ValueRef): ValueRef =
 
   assert_value_type(result, IntegerTypeKind)
 
+proc gen_magic_append_seq_elem(module: BModule; node: PNode): ValueRef =
+  let sq = gen_expr(module, node[1])
+  let sq_type = skipTypes(node[1].typ, {tyVar})
+  let header = llvm.buildBitCast(module.ll_builder, sq, type_to_ptr get_generic_seq_type(module), "")
+  let type_info = gen_type_info(module, sq_type)
+  echo "sq ", sq
+  echo "sq ty ", llvm.typeOf(sq)
+  echo "h ", header
+  echo "h ty ", llvm.typeOf(header)
+  echo "t ", type_info
+  debug node
+  assert false
+
 proc gen_magic_length_seq(module: BModule; node: PNode): ValueRef =
   let struct = gen_expr(module, node[1])
   result = build_nim_seq_len(module, struct)

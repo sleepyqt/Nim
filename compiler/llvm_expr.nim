@@ -150,6 +150,17 @@ proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed:
   else:
     result = value
 
+proc build_new_obj(module: BModule; dest: ValueRef; typ: PType) =
+  assert_value_type(dest, PointerTypeKind)
+  let type_info = gen_type_info(module, typ)
+  var args: seq[ValueRef]
+  args.add type_info
+  args.add constant_int(module, int get_type_size(module, typ))
+  let allocated_ptr = gen_call_runtime_proc(module, "newObj", args)
+  let ref_cast_type = get_type(module, typ)
+  let ref_cast = llvm.buildBitCast(module.ll_builder, allocated_ptr, ref_cast_type, "ref_cast")
+  gen_ref_copy(module, dest, ref_cast)
+
 # - Literals -------------------------------------------------------------------
 
 proc gen_nil_lit(module: BModule; node: PNode): ValueRef =
@@ -172,17 +183,23 @@ proc gen_float_lit(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
   result = llvm.constReal(ll_type, node.floatVal)
 
-proc gen_object_lit(module: BModule; node: PNode): ValueRef =
-  # todo: constant
+proc gen_object_constr(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
   let alloca = build_entry_alloca(module, ll_type, "object_literal")
-  let adr = llvm.buildBitCast(module.ll_builder, alloca, module.ll_pointer, "")
-  let size = get_type_size(module, node.typ)
-  build_call_memset(module, adr, 0, size)
-  result = alloca
+
+  let (dest, obj_type) = if node.typ.kind == tyRef:
+    build_new_obj(module, alloca, node.typ)
+    (llvm.buildLoad(module.ll_builder, alloca, ""), node.typ.lastSon)
+  else:
+    let adr = llvm.buildBitCast(module.ll_builder, alloca, module.ll_pointer, "")
+    let size = get_type_size(module, node.typ)
+    build_call_memset(module, adr, 0, size)
+    (alloca, node.typ)
+
+  result = dest
   for i in 1 ..< node.len:
     let field = node[i]
-    let lhs = build_field_access(module, node.typ, alloca, field[0].sym)
+    let lhs = build_field_access(module, obj_type, dest, field[0].sym)
     let rhs = gen_expr(module, field[1])
     gen_copy(module, lhs, rhs, field[0].typ)
 
@@ -246,19 +263,19 @@ proc gen_set_lit(module: BModule; node: PNode): ValueRef =
   else:
     result = gen_array_set_lit(module, node, size)
 
+proc build_cstring_lit(module: BModule; text: string): ValueRef =
+  let ll_type = llvm.arrayType(module.ll_char, cuint len(text) + 1)
+  let initializer = llvm.constStringInContext(module.ll_context, text, cuint len text, Bool 0)
+  let global = llvm.addGlobal(module.ll_module, ll_type, "literal.cstring")
+  llvm.setInitializer(global, initializer)
+  llvm.setGlobalConstant(global, Bool 1)
+  llvm.setLinkage(global, PrivateLinkage)
+  var indices = [constant(module, 0i32), constant(module, 0i32)]
+  result = llvm.buildGEP(module.ll_builder, global, addr indices[0], cuint len indices, "")
+
 proc gen_str_lit(module: BModule; node: PNode): ValueRef =
   if node.typ.kind == tyCString:
-    let typ = llvm.arrayType(module.ll_char, cuint len(node.strVal) + 1)
-
-    let initializer = llvm.constStringInContext(module.ll_context, node.strVal, cuint len node.strVal, Bool 0)
-    let global = llvm.addGlobal(module.ll_module, typ, "literal.cstring")
-
-    var indices = [constant(module, 0i32), constant(module, 0i32)]
-    result = llvm.buildGEP(module.ll_builder, global, addr indices[0], cuint len indices, "")
-
-    llvm.setInitializer(global, initializer)
-    llvm.setGlobalConstant(global, Bool 1)
-    llvm.setLinkage(global, PrivateLinkage)
+    result = build_cstring_lit(module, node.strVal)
   elif node.typ.kind == tyString:
     let header_type = get_generic_seq_type(module)
     # todo: flags in cap field
@@ -383,17 +400,14 @@ proc gen_magic_swap(module: BModule; node: PNode): ValueRef =
   gen_copy_lvalue(module, rhs, tmp, node[1].typ)
 
 proc gen_magic_new(module: BModule; node: PNode): ValueRef =
-  let dest_adr = gen_expr_lvalue(module, node[1])
-  assert_value_type(dest_adr, PointerTypeKind)
-  let type_info = gen_type_info(module, node[1].typ)
-  var args: seq[ValueRef]
-  args.add type_info
-  args.add constant_int(module, int get_type_size(module, node[1].typ))
-  let allocated_ptr = gen_call_runtime_proc(module, "newObj", args)
-  let ref_cast_type = get_type(module, node[1].typ)
-  let ref_cast = llvm.buildBitCast(module.ll_builder, allocated_ptr, ref_cast_type, "ref_cast")
-  gen_ref_copy(module, dest_adr, ref_cast)
-  result = dest_adr
+  result = gen_expr_lvalue(module, node[1])
+  build_new_obj(module, result, node[1].typ)
+
+proc gen_magic_is_nil(module: BModule; node: PNode): ValueRef =
+  let lhs = gen_expr(module, node[1])
+  let rhs = llvm.constNull(llvm.typeOf(lhs))
+  result = llvm.buildICmp(module.ll_builder, IntEQ, lhs, rhs, "")
+  result = build_i1_to_i8(module, result)
 
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
@@ -569,8 +583,10 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mInSet: result = gen_magic_in_set(module, node)
   # Heap
   of mNew: result = gen_magic_new(module, node)
+  of mIsNil: result = gen_magic_is_nil(module, node)
   # seq
   of mLengthSeq: result = gen_magic_length_seq(module, node)
+  of mAppendSeqElem: result = gen_magic_append_seq_elem(module, node)
   # strings
   of mLengthStr: result = gen_magic_length_str(module, node)
   of mNewString: result = gen_call_runtime_proc(module, node)
@@ -602,9 +618,10 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 proc gen_obj_down_conv(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
   let value = gen_expr(module, node[0])
-  assert llvm.getTypeKind(ll_type) == PointerTypeKind
+  let conv_type = if node.typ.kind == tyObject: type_to_ptr ll_type else: ll_type
+  assert llvm.getTypeKind(conv_type) == PointerTypeKind
   assert_value_type(value, PointerTypeKind)
-  result = llvm.buildBitCast(module.ll_builder, value, ll_type, "obj.down")
+  result = llvm.buildBitCast(module.ll_builder, value, conv_type, "obj.down")
 
 proc gen_obj_up_conv(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
@@ -959,7 +976,7 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkPar, nkTupleConstr:
     result = gen_tuple_constr(module, node)
   of nkObjConstr:
-    result = gen_object_lit(module, node)
+    result = gen_object_constr(module, node)
   of nkCast:
     result = gen_cast_expr(module, node)
   of nkHiddenStdConv, nkHiddenSubConv, nkConv:

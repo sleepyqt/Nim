@@ -1,17 +1,9 @@
-import ast
+import ast, types
 import llvm_data, llvm_type
 import llvm_dll as llvm
 from platform import TSystemCPU, TSystemOS, Target
 
 # ------------------------------------------------------------------------------
-
-proc `$`*(x: TypeRef): string =
-  if x == nil:
-    result = "nil TypeRef"
-  else:
-    let str = llvm.printTypeToString(x)
-    result = $str
-    disposeMessage(str)
 
 proc `$`*(x: ValueRef): string =
   if x == nil:
@@ -205,15 +197,20 @@ proc find_field(module: BModule; field: PSym; node: PNode; path: var seq[PathNod
 proc build_field_access*(module: BModule; object_type: PType; object_value: ValueRef; field: PSym): ValueRef =
   # returns pointer to object field
 
+  assert object_type != nil
+  assert object_type.kind == tyObject, $object_type.kind
+  assert field != nil
+
   var path: seq[PathNode]
   var found = false
   var current = object_type
   while true:
+    assert current.kind == tyObject
     set_len(path, 0)
     let super = if current.sons.len == 0: nil else: current[0]
     let found = find_field(module, field, current.n, path)
     if found or (current == nil): break
-    current = super
+    current = skipTypes(super, abstractPtrs)
 
   assert path.len > 0
 
@@ -226,7 +223,7 @@ proc build_field_access*(module: BModule; object_type: PType; object_value: Valu
 
   let object_adr =
     if current != object_type:
-      llvm.buildBitCast(module.ll_builder, object_value, type_to_ptr get_type(module, current), "super_cast")
+      llvm.buildBitCast(module.ll_builder, object_value, type_to_ptr get_type(module, current), "bfa.super_cast")
     else:
       object_value
 
