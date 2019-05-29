@@ -1,47 +1,47 @@
 # included from "llvm_pass.nim"
 
-type ArgClass* = enum
+type ArgClass = enum
   Direct # Passed directly in register
   Indirect # Passed indirectly via a pointer
   Expand # object or tuple expandend into consecutive arguments
   Ignore
   OpenArray
 
-type ArgFlag* = enum
+type ArgFlag = enum
   ByVal, InReg, Sext, Zext, ExpandToWords
 
-type ArgInfo* = object
-  class*: ArgClass
-  flags*: set[ArgFlag]
+type ArgInfo = object
+  class: ArgClass
+  flags: set[ArgFlag]
 
-type FuncFlag* = enum
+type FuncFlag = enum
   AttrUwtable
 
-type FuncInfo* = object
-  flags*: set[FuncFlag]
+type FuncInfo = object
+  flags: set[FuncFlag]
 
 # ------------------------------------------------------------------------------
 
-type BaseAbi* = ref object of RootObj
+type BaseAbi = ref object of RootObj
 
-method classify_argument_type*(abi: BaseAbi; module: BModule; typ: PType): ArgInfo {.base.} =
+method classify_argument_type(abi: BaseAbi; module: BModule; typ: PType): ArgInfo {.base.} =
   assert false
 
-method classify_return_type*(abi: BaseAbi; module: BModule; typ: PType): ArgInfo {.base.} =
+method classify_return_type(abi: BaseAbi; module: BModule; typ: PType): ArgInfo {.base.} =
   assert false
 
-method get_func_info*(abi: BaseAbi): FuncInfo {.base.} =
+method get_func_info(abi: BaseAbi): FuncInfo {.base.} =
   assert false
 
-proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv
+proc map_call_conv(module: BModule; cc: TCallingConvention): llvm.CallConv
 
-proc get_abi*(module: BModule): BaseAbi
+proc get_abi(module: BModule): BaseAbi
 
 # ------------------------------------------------------------------------------
 
-type GenericAbi* = ref object of BaseAbi
+type GenericAbi = ref object of BaseAbi
 
-method classify_argument_type*(abi: GenericAbi; module: BModule; typ: PType): ArgInfo =
+method classify_argument_type(abi: GenericAbi; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
 
   of tyArray:
@@ -67,7 +67,7 @@ method classify_argument_type*(abi: GenericAbi; module: BModule; typ: PType): Ar
   else:
     assert false
 
-method classify_return_type*(abi: GenericAbi; module: BModule; typ: PType): ArgInfo =
+method classify_return_type(abi: GenericAbi; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
 
   of tyArray:
@@ -86,16 +86,16 @@ method classify_return_type*(abi: GenericAbi; module: BModule; typ: PType): ArgI
   else:
     assert false
 
-method get_func_info*(abi: GenericAbi): FuncInfo =
+method get_func_info(abi: GenericAbi): FuncInfo =
   discard
 
 # ------------------------------------------------------------------------------
 
-type Amd64AbiSystemV* = ref object of BaseAbi
-  sse_regs*: int
-  int_regs*: int
+type Amd64AbiSystemV = ref object of BaseAbi
+  sse_regs: int
+  int_regs: int
 
-method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType): ArgInfo =
+method classify_argument_type(abi: Amd64AbiSystemV; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
 
   of tyArray:
@@ -152,7 +152,7 @@ method classify_argument_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType
   else:
     module.ice("classify_argument_type: " & $typ.kind)
 
-method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType): ArgInfo =
+method classify_return_type(abi: Amd64AbiSystemV; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
 
   of tyArray:
@@ -192,14 +192,14 @@ method classify_return_type*(abi: Amd64AbiSystemV; module: BModule; typ: PType):
   else:
     module.ice("classify_return_type: " & $typ.kind)
 
-method get_func_info*(abi: Amd64AbiSystemV): FuncInfo =
+method get_func_info(abi: Amd64AbiSystemV): FuncInfo =
   result.flags = {AttrUwtable}
 
 # ------------------------------------------------------------------------------
 
-type Amd64AbiWindows* = ref object of BaseAbi
+type Amd64AbiWindows = ref object of BaseAbi
 
-method classify_argument_type*(abi: Amd64AbiWindows; module: BModule; typ: PType): ArgInfo =
+method classify_argument_type(abi: Amd64AbiWindows; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
 
   of tyArray:
@@ -222,7 +222,7 @@ method classify_argument_type*(abi: Amd64AbiWindows; module: BModule; typ: PType
   else:
     module.ice("classify_argument_type: " & $typ.kind)
 
-method classify_return_type*(abi: Amd64AbiWindows; module: BModule; typ: PType): ArgInfo =
+method classify_return_type(abi: Amd64AbiWindows; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
 
   of tyArray:
@@ -240,12 +240,12 @@ method classify_return_type*(abi: Amd64AbiWindows; module: BModule; typ: PType):
   else:
     module.ice("classify_return_type: " & $typ.kind)
 
-method get_func_info*(abi: Amd64AbiWindows): FuncInfo =
+method get_func_info(abi: Amd64AbiWindows): FuncInfo =
   discard
 
 # ------------------------------------------------------------------------------
 
-type X86Abi* = ref object of BaseAbi
+type X86Abi = ref object of BaseAbi
 
 proc x86_can_expand(module: BModule; struct: PType): bool =
   let ll_type = get_type(module, struct)
@@ -258,7 +258,7 @@ proc x86_can_expand(module: BModule; struct: PType): bool =
 
   result = true
 
-method classify_argument_type*(abi: X86Abi; module: BModule; typ: PType): ArgInfo =
+method classify_argument_type(abi: X86Abi; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
 
   of tyArray:
@@ -303,7 +303,7 @@ method classify_argument_type*(abi: X86Abi; module: BModule; typ: PType): ArgInf
   else:
     module.ice("classify_argument_type: " & $typ.kind)
 
-method classify_return_type*(abi: X86Abi; module: BModule; typ: PType): ArgInfo =
+method classify_return_type(abi: X86Abi; module: BModule; typ: PType): ArgInfo =
   case typ.kind:
 
   of tyArray:
@@ -331,12 +331,12 @@ method classify_return_type*(abi: X86Abi; module: BModule; typ: PType): ArgInfo 
   else:
     module.ice("classify_return_type: " & $typ.kind)
 
-method get_func_info*(abi: X86Abi): FuncInfo =
+method get_func_info(abi: X86Abi): FuncInfo =
   discard
 
 # ------------------------------------------------------------------------------
 
-proc get_abi*(module: BModule): BaseAbi =
+proc get_abi(module: BModule): BaseAbi =
   case module.abi:
   of PlatformABI.AMD64_SystemV:   result = Amd64AbiSystemV()
   of PlatformABI.AMD64_Windows:   result = Amd64AbiWindows()
@@ -345,7 +345,7 @@ proc get_abi*(module: BModule): BaseAbi =
 
 # ------------------------------------------------------------------------------
 
-proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv =
+proc map_call_conv(module: BModule; cc: TCallingConvention): llvm.CallConv =
   let os = module.module_list.config.target.targetOS
   let cpu = module.module_list.config.target.targetCPU
 

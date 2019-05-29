@@ -25,19 +25,19 @@ const spam_proc = false
 
 # ------------------------------------------------------------------------------
 
-proc get_type*(module: BModule; typ: PType): TypeRef
-proc get_type_size*(module: BModule; typ: PType): BiggestInt
-proc get_type_align*(module: BModule; typ: PType): BiggestInt
-proc type_to_ptr*(value: TypeRef): TypeRef
-proc get_object_case_branch_type*(module: BModule; node: PNode): TypeRef
-proc expand_struct_to_words*(module: BModule; struct: PType): seq[TypeRef]
-proc expand_struct*(module: BModule; struct: TypeRef): seq[TypeRef]
+proc get_type(module: BModule; typ: PType): TypeRef
+proc get_type_size(module: BModule; typ: PType): BiggestInt
+proc get_type_align(module: BModule; typ: PType): BiggestInt
+proc type_to_ptr(value: TypeRef): TypeRef
+proc get_object_case_branch_type(module: BModule; node: PNode): TypeRef
+proc expand_struct_to_words(module: BModule; struct: PType): seq[TypeRef]
+proc expand_struct(module: BModule; struct: TypeRef): seq[TypeRef]
 
-proc gen_stmt*(module: BModule; node: PNode)
-proc gen_expr*(module: BModule; node: PNode): ValueRef
-proc gen_expr_lvalue*(module: BModule; node: PNode): ValueRef
-proc gen_copy*(module: BModule; dst, val: ValueRef; typ: PType)
-proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef)
+proc gen_stmt(module: BModule; node: PNode)
+proc gen_expr(module: BModule; node: PNode): ValueRef
+proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef
+proc gen_copy(module: BModule; dst, val: ValueRef; typ: PType)
+proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef)
 proc build_cstring_lit(module: BModule; text: string): ValueRef
 proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed: bool): ValueRef
 

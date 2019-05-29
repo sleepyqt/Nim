@@ -55,7 +55,7 @@ proc build_local_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
 proc gen_var_prototype(module: BModule; node: PNode): ValueRef =
   let sym = node.sym
   result = module.get_value(sym)
-  if (result == nil):# and (lfNoDecl notin sym.loc.flags) and (sym.owner.id != module.module_sym.id):
+  if (result == nil):
     let ll_type = get_type(module, node.sym.typ)
     let name = mangle_global_var_name(module, sym)
     result = llvm.addGlobal(module.ll_module, ll_type, name)
@@ -111,10 +111,6 @@ proc gen_tuple_var(module: BModule; node: PNode) =
 
 proc gen_single_var(module: BModule; node: PNode) =
   let sym = node[0].sym
-
-  if sym.name.s == "allocator":
-    echo "holy shit it cursed:("
-    debug node
 
   if (sfCompileTime notin sym.flags) and (lfNoDecl notin sym.loc.flags):
     if sfGlobal in sym.flags:

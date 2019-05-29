@@ -1,6 +1,6 @@
 # included from "llvm_pass.nim"
 
-proc gen_proc_prototype*(module: BModule; sym: PSym): ValueRef =
+proc gen_proc_prototype(module: BModule; sym: PSym): ValueRef =
   result = module.get_value(sym)
   if result == nil:
     let proc_type = get_proc_type(module, sym.typ)
@@ -19,7 +19,7 @@ proc gen_proc_prototype*(module: BModule; sym: PSym): ValueRef =
       echo "♥♥ mangled name     : ", proc_name
       echo "♥♥ --------------------------------------------------"
 
-proc gen_proc_body*(module: BModule; sym: PSym) =
+proc gen_proc_body(module: BModule; sym: PSym) =
   assert sym != nil
   assert sym.kind in {skProc, skFunc}
   assert module.get_value(sym) != nil
@@ -44,8 +44,6 @@ proc gen_proc_body*(module: BModule; sym: PSym) =
     let entry_bb   = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "entry")
     let return_bb  = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "return")
     var result_var: ValueRef # addres of *result* variable
-
-    #llvm.setFunctionCallConv(proc_val, cuint map_call_conv(module, sym.typ.callConv))
 
     llvm.setLinkage(proc_val, ExternalLinkage)
     llvm.setVisibility(proc_val, DefaultVisibility)
@@ -229,7 +227,7 @@ proc gen_proc_body*(module: BModule; sym: PSym) =
     llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
 
 
-proc gen_proc*(module: BModule; sym: PSym): ValueRef =
+proc gen_proc(module: BModule; sym: PSym): ValueRef =
   if (sfBorrow in sym.flags) or (sym.typ == nil): return
 
   if lfImportCompilerProc in sym.loc.flags:
@@ -356,7 +354,6 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
     of ArgClass.Ignore:
       discard
     of ArgClass.OpenArray:
-      #echo "openarray type ", llvm.typeOf(arg_value)
       assert_value_type(arg_value, PointerTypeKind)
       let adr_field_data = build_field_ptr(module, arg_value, constant(module, 0i32))
       let adr_field_lengt = build_field_ptr(module, arg_value, constant(module, 1i32))
@@ -402,7 +399,7 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
       discard
     # end case
 
-proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
+proc gen_call_expr(module: BModule; node: PNode): ValueRef =
   let cc = node[0].typ.callConv
   let callee = gen_expr(module, node[0])
 
@@ -426,7 +423,7 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
-proc gen_call_runtime_proc*(module: BModule; name: string; arguments: seq[ValueRef]): ValueRef =
+proc gen_call_runtime_proc(module: BModule; name: string; arguments: seq[ValueRef]): ValueRef =
   let compiler_proc = module.module_list.graph.getCompilerProc(name)
 
   if compiler_proc == nil:
@@ -446,7 +443,7 @@ proc gen_call_runtime_proc*(module: BModule; name: string; arguments: seq[ValueR
 
   result = build_call(module, proc_type, callee, arguments, arguments_types)
 
-proc gen_call_runtime_proc*(module: BModule; node: PNode): ValueRef =
+proc gen_call_runtime_proc(module: BModule; node: PNode): ValueRef =
   assert node.kind in nkCallKinds
 
   let proc_sym = node[namePos].sym
@@ -465,12 +462,3 @@ proc gen_call_runtime_proc*(module: BModule; node: PNode): ValueRef =
     result = gen_proc_prototype(module, compiler_proc)
 
   result = gen_call_expr(module, node)
-
-# ------------------------------------------------------------------------------
-
-proc get_eh_personality_proc*(module: BModule): ValueRef =
-  if module.ehprocs.personality == nil:
-    let sym = module.module_list.graph.getCompilerProc("nim_eh_personality")
-    if sym == nil: module.ice("nim_eh_personality missing")
-    module.ehprocs.personality = gen_proc(module, sym)
-    result = module.ehprocs.personality

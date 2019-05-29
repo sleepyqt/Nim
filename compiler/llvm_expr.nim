@@ -1,6 +1,6 @@
 # included from "llvm_pass.nim"
 
-proc gen_copy*(module: BModule; dst, val: ValueRef; typ: PType) =
+proc gen_copy(module: BModule; dst, val: ValueRef; typ: PType) =
   assert dst != nil
   assert val != nil
   assert typ != nil
@@ -78,7 +78,7 @@ proc gen_ref_copy(module: BModule; dst, adr: ValueRef) =
   assert_value_type(adr, PointerTypeKind)
   discard llvm.buildStore(module.ll_builder, adr, dst)
 
-proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef) =
+proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
   assert typ != nil
   assert alloca != nil
   assert_value_type(alloca, PointerTypeKind)
@@ -706,13 +706,6 @@ proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
 
   case node.sym.kind:
   of skVar, skForVar, skLet, skResult, skTemp:
-
-    if node.sym.name.s == "allocator":
-      echo "protofdalksdjsalkjdklsajdsad"
-      echo node.sym.info.line, " c ", node.sym.info.col
-      echo node.info.line, " c ", node.info.col
-      debug node
-
     if {sfGlobal, sfThread} * node.sym.flags != {}:
       result = gen_var_prototype(module, node)
     else:
@@ -999,7 +992,7 @@ proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
 
   assert_value_type(result, PointerTypeKind)
 
-proc gen_expr*(module: BModule; node: PNode): ValueRef =
+proc gen_expr(module: BModule; node: PNode): ValueRef =
   # R value, can be pointer or value
   #echo "gen_expr kind: ", node.kind, " ", file_info(module, node)
   case node.kind:
@@ -1125,5 +1118,5 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
-proc gen_stmt*(module: BModule; node: PNode) =
+proc gen_stmt(module: BModule; node: PNode) =
   let val = gen_expr(module, node)

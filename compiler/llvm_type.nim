@@ -1,6 +1,6 @@
 # included from "llvm_pass.nim"
 
-proc `$`*(x: TypeRef): string =
+proc `$`(x: TypeRef): string =
   if x == nil:
     result = "nil TypeRef"
   else:
@@ -8,35 +8,35 @@ proc `$`*(x: TypeRef): string =
     result = $str
     disposeMessage(str)
 
-proc is_signed_type*(typ: PType): bool =
+proc is_signed_type(typ: PType): bool =
   assert typ != nil
   let typ = skipTypes(typ, {tyRange})
   result = typ.kind in {tyInt .. tyInt64}
 
-proc get_type_size*(module: BModule; typ: PType): BiggestInt =
+proc get_type_size(module: BModule; typ: PType): BiggestInt =
   result = getSize(module.module_list.config, typ)
 
-proc get_type_align*(module: BModule; typ: PType): BiggestInt =
+proc get_type_align(module: BModule; typ: PType): BiggestInt =
   result = getAlign(module.module_list.config, typ)
 
-proc type_to_ptr*(value: TypeRef): TypeRef =
+proc type_to_ptr(value: TypeRef): TypeRef =
   result = llvm.pointerType(value, 0)
 
 # ------------------------------------------------------------------------------
 
-proc live_as_pointer*(module: BModule; typ: PType): bool =
+proc live_as_pointer(module: BModule; typ: PType): bool =
   # values of this type are newer loaded in registers
   result = typ.kind in {tyObject, tyArray, tyTuple, tyOpenArray}
   result = result or (typ.kind == tySet and get_type_size(module, typ) > 8)
 
-proc get_runtime_type*(module: BModule; name: string): TypeRef =
+proc get_runtime_type(module: BModule; name: string): TypeRef =
   let sym = getCompilerProc(module.module_list.graph, name)
   if sym == nil: module.ice(name & " missing")
   result = get_type(module, sym.typ)
 
 # ------------------------------------------------------------------------------
 
-proc expand_struct*(module: BModule; struct: TypeRef): seq[TypeRef] =
+proc expand_struct(module: BModule; struct: TypeRef): seq[TypeRef] =
   # {i8, i16, i32} -> i8, i16, i32
   assert struct != nil
   echo struct
@@ -45,11 +45,11 @@ proc expand_struct*(module: BModule; struct: TypeRef): seq[TypeRef] =
   setLen(result, count)
   llvm.getStructElementTypes(struct, addr result[0])
 
-proc wrap_in_struct*(module: BModule; types: seq[TypeRef]): TypeRef =
+proc wrap_in_struct(module: BModule; types: seq[TypeRef]): TypeRef =
   # i8, i16, i32 -> {i8, i16, i32}
   result = llvm.structTypeInContext(module.ll_context, unsafe_addr types[0], cuint len types, Bool false)
 
-proc expand_struct_to_words*(module: BModule; struct: PType): seq[TypeRef] =
+proc expand_struct_to_words(module: BModule; struct: PType): seq[TypeRef] =
   # {i8, i16, i32} -> i32, i32
   let size = get_type_size(module, struct)
 
@@ -71,7 +71,7 @@ proc expand_struct_to_words*(module: BModule; struct: PType): seq[TypeRef] =
 
 # Array Type -------------------------------------------------------------------
 
-proc get_generic_seq_type*(module: BModule): TypeRef =
+proc get_generic_seq_type(module: BModule): TypeRef =
   result = module.ll_generic_seq
   if result == nil:
     module.ll_generic_seq = get_runtime_type(module, "TGenericSeq")
@@ -93,8 +93,6 @@ proc get_seq_type(module: BModule; typ: PType): TypeRef =
   let sig = hashType(typ)
   result = module.get_type(sig)
   if result == nil:
-    #let name = typ.sym.name.s
-    #debug typ
     let struct = llvm.structCreateNamed(module.ll_context, "seq")
 
     let header = get_generic_seq_type(module)
@@ -221,7 +219,7 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
 
     fields = @[]
 
-proc get_object_case_branch_type*(module: BModule; node: PNode): TypeRef =
+proc get_object_case_branch_type(module: BModule; node: PNode): TypeRef =
   var fields: seq[TypeRef]
   gen_object_fields(module, fields, node)
   result = llvm.structCreateNamed(module.ll_context, "anonymous") # todo: cache?
@@ -235,10 +233,10 @@ proc get_tuple_type(module: BModule; typ: PType): TypeRef =
 
 # String Types -----------------------------------------------------------------
 
-proc get_cstring_type*(module: BModule; typ: PType): TypeRef =
+proc get_cstring_type(module: BModule; typ: PType): TypeRef =
   module.ll_cstring
 
-proc get_nim_string_type*(module: BModule): TypeRef =
+proc get_nim_string_type(module: BModule): TypeRef =
   result = module.ll_nim_string
   if result == nil:
     module.ll_nim_string = type_to_ptr get_runtime_type(module, "NimStringDesc")
@@ -246,13 +244,13 @@ proc get_nim_string_type*(module: BModule): TypeRef =
 
 # Procedure Types --------------------------------------------------------------
 
-proc get_proc_param_type*(module: BModule; typ: PType): TypeRef =
+proc get_proc_param_type(module: BModule; typ: PType): TypeRef =
   if typ.kind == tyBool:
     result = module.ll_bool
   else:
     result = get_type(module, typ)
 
-proc get_proc_type*(module: BModule; typ: PType): TypeRef =
+proc get_proc_type(module: BModule; typ: PType): TypeRef =
   var params = newSeq[TypeRef]()
 
   var abi = get_abi(module)
@@ -356,7 +354,7 @@ proc get_ptr_type(module: BModule; typ: PType): TypeRef =
 
 # ------------------------------------------------------------------------------
 
-proc get_type*(module: BModule; typ: PType): TypeRef =
+proc get_type(module: BModule; typ: PType): TypeRef =
   ## maps nim type LLVM type
   assert module != nil
   assert typ != nil
@@ -394,7 +392,7 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
 
 # ------------------------------------------------------------------------------
 
-proc gen_type_info*(module: BModule; typ: PType): ValueRef =
+proc gen_type_info(module: BModule; typ: PType): ValueRef =
   let sig = hashType(typ)
   result = module.get_type_info(sig)
   if result == nil:
@@ -404,8 +402,7 @@ proc gen_type_info*(module: BModule; typ: PType): ValueRef =
       echo "☭☭ --------------------------------------------------"
 
     let nim_type = get_rtti_nim_type(module)
-    # %TNimType = type { i64, i8, i8, %TNimType*, %TNimNode*, i8*, void (i8*, i64)*, i8* (i8*)* }
-    echo "TNimType: ", nim_type
+    # { i64, i8, i8, %TNimType*, %TNimNode*, i8*, void (i8*, i64)*, i8* (i8*)* }
 
     #var fields: seq[ValueRef]
     #let initializer = llvm.constStructInContext(module.ll_context, addr fields[0], cuint len fields, Bool 0)
@@ -422,7 +419,3 @@ proc gen_type_info*(module: BModule; typ: PType): ValueRef =
     llvm.setLinkage(result, PrivateLinkage)
 
     module.add_type_info(sig, result)
-
-# ------------------------------------------------------------------------------
-
-#include llvm_abi

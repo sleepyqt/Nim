@@ -1,6 +1,6 @@
 # included from "llvm_pass.nim"
 
-proc file_info*(module: BModule; node: PNode): string =
+proc file_info(module: BModule; node: PNode): string =
   let line = int node.info.line
   let col = int node.info.col
   let index = int node.info.fileIndex
@@ -13,7 +13,7 @@ proc file_info*(module: BModule; node: PNode): string =
 
 # ------------------------------------------------------------------------------
 
-proc `$`*(x: ValueRef): string =
+proc `$`(x: ValueRef): string =
   if x == nil:
     result = "nil ValueRef"
   else:
@@ -23,7 +23,7 @@ proc `$`*(x: ValueRef): string =
 
 # ------------------------------------------------------------------------------
 
-template assert_value_type*(val: ValueRef; kind: TypeKind) =
+template assert_value_type(val: ValueRef; kind: TypeKind) =
   when true:
     assert val != nil
     let typ = llvm.typeOf(val)
@@ -38,48 +38,48 @@ template assert_value_type*(val: ValueRef; kind: TypeKind) =
 
 # ------------------------------------------------------------------------------
 
-proc constant*(module: BModule; value: int8): ValueRef =
+proc constant(module: BModule; value: int8): ValueRef =
   result = llvm.constInt(module.ll_int8, culonglong value, Bool 1)
 
-proc constant*(module: BModule; value: int16): ValueRef =
+proc constant(module: BModule; value: int16): ValueRef =
   result = llvm.constInt(module.ll_int16, culonglong value, Bool 1)
 
-proc constant*(module: BModule; value: int32): ValueRef =
+proc constant(module: BModule; value: int32): ValueRef =
   result = llvm.constInt(module.ll_int32, culonglong value, Bool 1)
 
-proc constant*(module: BModule; value: int64): ValueRef =
+proc constant(module: BModule; value: int64): ValueRef =
   result = llvm.constInt(module.ll_int64, culonglong value, Bool 1)
 
-proc constant*(module: BModule; value: uint8): ValueRef =
+proc constant(module: BModule; value: uint8): ValueRef =
   result = llvm.constInt(module.ll_int8, culonglong value, Bool 0)
 
-proc constant*(module: BModule; value: uint16): ValueRef =
+proc constant(module: BModule; value: uint16): ValueRef =
   result = llvm.constInt(module.ll_int16, culonglong value, Bool 0)
 
-proc constant*(module: BModule; value: uint32): ValueRef =
+proc constant(module: BModule; value: uint32): ValueRef =
   result = llvm.constInt(module.ll_int32, culonglong value, Bool 0)
 
-proc constant*(module: BModule; value: uint64): ValueRef =
+proc constant(module: BModule; value: uint64): ValueRef =
   result = llvm.constInt(module.ll_int64, culonglong value, Bool 0)
 
-proc constant_int*(module: BModule; value: int64): ValueRef =
+proc constant_int(module: BModule; value: int64): ValueRef =
   case module.module_list.config.target.intSize:
   of 8: result = constant(module, int64 value)
   of 4: result = constant(module, int32 value)
   else: assert false
 
-proc constant_true*(module: BModule): ValueRef =
+proc constant_true(module: BModule): ValueRef =
   result = llvm.constInt(module.ll_bool, culonglong 1, Bool 0)
 
-proc constant_false*(module: BModule): ValueRef =
+proc constant_false(module: BModule): ValueRef =
   result = llvm.constInt(module.ll_bool, culonglong 0, Bool 0)
 
-proc constant_nil*(module: BModule): ValueRef =
+proc constant_nil(module: BModule): ValueRef =
   result = llvm.constNull(module.ll_pointer)
 
 # ------------------------------------------------------------------------------
 
-proc build_generic_cmp*(module: BModule; pred: string; lhs, rhs: ValueRef; typ: PType): ValueRef =
+proc build_generic_cmp(module: BModule; pred: string; lhs, rhs: ValueRef; typ: PType): ValueRef =
   case typ.kind:
   of tyInt .. tyInt64:
     var op: IntPredicate
@@ -120,7 +120,7 @@ proc build_generic_cmp*(module: BModule; pred: string; lhs, rhs: ValueRef; typ: 
 
 # ------------------------------------------------------------------------------
 
-proc build_i8_to_i1*(module: BModule; value: ValueRef): ValueRef =
+proc build_i8_to_i1(module: BModule; value: ValueRef): ValueRef =
   assert value != nil
   if llvm.getValueKind(value) == InstructionValueKind:
     # eleminate common zext trunc combo
@@ -131,24 +131,24 @@ proc build_i8_to_i1*(module: BModule; value: ValueRef): ValueRef =
       return
   result = llvm.buildTrunc(module.ll_builder, value, module.ll_bool, "")
 
-proc build_i1_to_i8*(module: BModule; value: ValueRef): ValueRef =
+proc build_i1_to_i8(module: BModule; value: ValueRef): ValueRef =
   result = llvm.buildZExt(module.ll_builder, value, module.ll_mem_bool, "")
 
 # ------------------------------------------------------------------------------
 
-proc build_field_ptr*(module: BModule; struct, index: ValueRef; hint = "struct.index"): ValueRef =
+proc build_field_ptr(module: BModule; struct, index: ValueRef; hint = "struct.index"): ValueRef =
   assert_value_type(struct, PointerTypeKind)
   var indices = [constant(module, 0i32), index]
   result = llvm.buildGEP(module.ll_builder, struct, addr indices[0], 2, hint)
 
 # ------------------------------------------------------------------------------
 
-proc maybe_terminate*(module: BModule; target: BasicBlockRef) =
+proc maybe_terminate(module: BModule; target: BasicBlockRef) =
   # try to terminate current block
   if llvm.getBasicBlockTerminator(getInsertBlock(module.ll_builder)) == nil:
     discard llvm.buildBr(module.ll_builder, target)
 
-proc build_entry_alloca*(module: BModule; typ: TypeRef; name: cstring): ValueRef =
+proc build_entry_alloca(module: BModule; typ: TypeRef; name: cstring): ValueRef =
   # insert `alloca` instruction at function entry point
   let incoming_bb = llvm.getInsertBlock(module.ll_builder)
   let fun         = llvm.getBasicBlockParent(incoming_bb)
@@ -162,7 +162,7 @@ proc build_entry_alloca*(module: BModule; typ: TypeRef; name: cstring): ValueRef
   # restore position
   llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
 
-proc build_open_array*(module: BModule; ptr_T: PType; data_ptr: ValueRef; length: ValueRef; name: string): ValueRef =
+proc build_open_array(module: BModule; ptr_T: PType; data_ptr: ValueRef; length: ValueRef; name: string): ValueRef =
   let ll_ptr_T = type_to_ptr get_type(module, ptr_T)
   var struct_fields = [ll_ptr_T, module.ll_int]
   let ll_type = llvm.structTypeInContext(module.ll_context, addr struct_fields[0], 2, Bool 0) # {T*, i64}
@@ -202,7 +202,7 @@ proc find_field(module: BModule; field: PSym; node: PNode; path: var seq[PathNod
   else:
     discard
 
-proc build_field_access*(module: BModule; object_type: PType; object_value: ValueRef; field: PSym): ValueRef =
+proc build_field_access(module: BModule; object_type: PType; object_value: ValueRef; field: PSym): ValueRef =
   # returns pointer to object field
 
   assert object_type != nil
@@ -253,7 +253,7 @@ proc call_intrisic(module: BModule; name: string; typ: TypeRef; args: openarray[
     fn = llvm.addFunction(module.ll_module, name, typ)
   result = llvm.buildCall(module.ll_builder, fn, unsafe_addr args[0], cuint len args, "")
 
-proc build_call_memcpy*(module: BModule; dst, src: ValueRef; len: int64) =
+proc build_call_memcpy(module: BModule; dst, src: ValueRef; len: int64) =
   case module.module_list.config.target.intSize:
   of 8:
     var args = [ dst, src, constant(module, len), constant_false(module) ]
@@ -263,7 +263,7 @@ proc build_call_memcpy*(module: BModule; dst, src: ValueRef; len: int64) =
     discard call_intrisic(module, "llvm.memcpy.p0i8.p0i8.i32", module.ll_memcpy32, args)
   else: assert(false)
 
-proc build_call_memset*(module: BModule; dst: ValueRef; val: int8; len: int64) =
+proc build_call_memset(module: BModule; dst: ValueRef; val: int8; len: int64) =
   case module.module_list.config.target.intSize:
   of 8:
     var args = [ dst, constant(module, val), constant(module, len), constant_false(module) ]
@@ -273,17 +273,17 @@ proc build_call_memset*(module: BModule; dst: ValueRef; val: int8; len: int64) =
     discard call_intrisic(module, "llvm.memset.p0i8.i32", module.ll_memset32, args)
   else: assert(false)
 
-proc build_call_setjmp*(module: BModule; buff: ValueRef): ValueRef =
+proc build_call_setjmp(module: BModule; buff: ValueRef): ValueRef =
   assert_value_type(buff, PointerTypeKind)
   var args = [ buff ]
   result = call_intrisic(module, "llvm.eh.sjlj.setjmp", module.ll_setjmp, args)
 
-proc build_call_longjmp*(module: BModule; buff: ValueRef) =
+proc build_call_longjmp(module: BModule; buff: ValueRef) =
   assert_value_type(buff, PointerTypeKind)
   var args = [buff]
   discard call_intrisic(module, "llvm.eh.sjlj.longjmp", module.ll_longjmp, args)
 
 # ------------------------------------------------------------------------------
 
-proc add_function_attr*(module: BModule; fun: ValueRef; attr: AttributeRef) =
+proc add_function_attr(module: BModule; fun: ValueRef; attr: AttributeRef) =
   llvm.addAttributeAtIndex(fun, 0xFFFF_FFFFu32, attr)
