@@ -393,29 +393,100 @@ proc get_type(module: BModule; typ: PType): TypeRef =
 # ------------------------------------------------------------------------------
 
 proc gen_type_info(module: BModule; typ: PType): ValueRef =
-  let sig = hashType(typ)
-  result = module.get_type_info(sig)
+  const
+    irrelevantForBackend = {tyGenericBody, tyGenericInst, tyGenericInvocation,
+                            tyDistinct, tyRange, tyStatic, tyAlias, tySink,
+                            tyInferred, tyOwned}
+  let original_type = typ
+  let sig = hashType(original_type)
+  let typ = skipTypes(original_type, irrelevantForBackend + tyUserTypeClasses)
+  result = get_type_info(module, sig)
   if result == nil:
-    when spam_types:
-      echo "☭☭ --------------------------------------------------"
-      echo "☭☭ gen_type_info:   ", typ.kind
-      echo "☭☭ --------------------------------------------------"
+    let name = mangle_rtti_name(module, typ, sig)
+    let nim_type = get_runtime_type(module, "TNimType")
+    let nim_node = get_runtime_type(module, "TNimNode")
 
-    let nim_type = get_rtti_nim_type(module)
-    # { i64, i8, i8, %TNimType*, %TNimNode*, i8*, void (i8*, i64)*, i8* (i8*)* }
+    let owner = getModule(skipTypes(typ, typedescPtrs).owner)
+    if owner != module.module_sym: # figure where to put type info
+      let target = module.module_list.modules[owner.position]
+      discard gen_type_info(target, original_type) # put in some other module
+      # generate extern global here
+      result = llvm.addGlobal(module.ll_module, nim_type, name)
+      module.add_type_info(sig, result)
+      llvm.setLinkage(result, ExternalLinkage)
+    else:
+      when spam_rtti:
+        echo "☭☭ --------------------------------------------------"
+        echo "☭☭ gen_type_info    :   ", typ.kind
 
-    #var fields: seq[ValueRef]
-    #let initializer = llvm.constStructInContext(module.ll_context, addr fields[0], cuint len fields, Bool 0)
+      var marker_params = [module.ll_pointer, module.ll_int]
+      let marker = llvm.functionType(module.ll_void, addr marker_params[0], 2, 0)
+      var deepcopy_params = [module.ll_pointer]
+      let deepcopy = llvm.functionType(module.ll_pointer, addr deepcopy_params[0], 1, 0)
 
-    let initializer = llvm.constNull(nim_type)
+      var fsize = 0
+      var fkind = 0
+      var fflags = 0
+      var fbase = 0
+      var fnode = 0
 
-    when spam_types:
-      echo "initializer type: ", llvm.typeOf(initializer)
+      case typ.kind:
+      of tyEmpty, tyVoid:
+        discard
+      of tyPointer, tyBool, tyChar, tyCString, tyString, tyInt .. tyUInt64, tyVar, tyLent:
+        discard
+      of tyStatic:
+        discard
+      of tyUserTypeClasses:
+        discard
+      of tyProc:
+        discard
+      of tySequence:
+        discard
+      of tyRef:
+        fsize = int get_type_size(module, typ)
+        fkind = int typ.kind
+      of tyPtr, tyRange, tyUncheckedArray:
+        discard
+      of tyArray:
+        discard
+      of tySet:
+        discard
+      of tyEnum:
+        discard
+      of tyObject:
+        fsize = int get_type_size(module, typ)
+        fkind = int typ.kind
+      of tyTuple:
+        discard
+      else:
+        module.ice("gen_type_info: " & $typ.kind)
 
-    result = llvm.addGlobal(module.ll_module, nim_type, "rtti")
+      var fields: seq[ValueRef]
+      fields.add constant_int(module, fsize)
+      fields.add constant(module, int8 fkind)
+      fields.add constant(module, int8 fflags)
+      fields.add llvm.constNull(type_to_ptr nim_type)
+      fields.add llvm.constNull(type_to_ptr nim_node)
+      fields.add llvm.constNull(module.ll_pointer)
+      fields.add llvm.constNull(type_to_ptr marker)
+      fields.add llvm.constNull(type_to_ptr deepcopy)
+      let initializer = llvm.constNamedStruct(nim_type, addr fields[0], cuint len fields)
 
-    llvm.setInitializer(result, initializer)
-    llvm.setGlobalConstant(result, Bool 1)
-    llvm.setLinkage(result, PrivateLinkage)
+      when spam_rtti:
+        echo "☭☭ nim_type         : ", nim_type
+        echo "☭☭ initializer      : ", initializer
+        echo "☭☭ initializer type : ", llvm.typeOf(initializer)
 
-    module.add_type_info(sig, result)
+      result = llvm.addGlobal(module.ll_module, nim_type, name)
+      module.add_type_info(sig, result)
+
+      llvm.setInitializer(result, initializer)
+      llvm.setGlobalConstant(result, Bool 1)
+
+      when spam_rtti:
+        echo "☭☭ result           : ", result
+        echo "☭☭ result ty        : ", llvm.typeOf(result)
+        echo "☭☭ --------------------------------------------------"
+
+

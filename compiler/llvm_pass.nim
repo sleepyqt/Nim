@@ -8,7 +8,7 @@ from pathutils import changeFileExt, `$`
 from extccomp import addFileToCompile
 from lineinfos import TFileInfo, MsgConfig, TLineInfo
 from magicsys import getCompilerProc
-from astalgo import debug
+from astalgo import debug, getModule
 from sighashes import hashType
 from lowerings import lowerTupleUnpacking
 from transf import transformBody
@@ -22,6 +22,7 @@ import llvm_dll as llvm
 const spam_var = false
 const spam_types = false
 const spam_proc = false
+const spam_rtti = true
 
 # ------------------------------------------------------------------------------
 
@@ -412,7 +413,7 @@ proc llWriteModules*(backend: RootRef, config: ConfigRef) =
         var res1 = llvm.writeBitcodeToFile(module.ll_module, cstring bc_file)
 
       if errors:
-        module.ice("broken bitcode")
+        module.ice("broken bitcode in module " & $module.module_sym.name.s)
 
       when true:
         var err1: cstring

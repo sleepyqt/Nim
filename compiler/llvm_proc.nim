@@ -436,7 +436,7 @@ proc gen_call_runtime_proc(module: BModule; name: string; arguments: seq[ValueRe
 
   let target = find_module(module, compiler_proc)
   discard gen_proc_prototype(target, compiler_proc)
-  target.delayed_procs.add(compiler_proc); echo "a proc delayed: ", compiler_proc.name.s
+  target.delayed_procs.add(compiler_proc)
   let callee = gen_proc_prototype(module, compiler_proc)
 
   assert arguments.len == arguments_types.len
@@ -458,7 +458,7 @@ proc gen_call_runtime_proc(module: BModule; node: PNode): ValueRef =
     # so delay generation of their code
     let target = find_module(module, compiler_proc)
     discard gen_proc_prototype(target, compiler_proc)
-    target.delayed_procs.add(compiler_proc); echo "b proc delayed: ", compiler_proc.name.s
+    target.delayed_procs.add(compiler_proc)
     result = gen_proc_prototype(module, compiler_proc)
 
   result = gen_call_expr(module, node)

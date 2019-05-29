@@ -437,6 +437,7 @@ var setInstructionCallConv*: proc(instr: ValueRef; cc: cuint) {.dll.}
 var getFunctionCallConv*: proc(fn: ValueRef): cuint {.dll.}
 
 var countBasicBlocks*: proc(fn: ValueRef): cuint {.dll.}
+var constNamedStruct*: proc(structTy: TypeRef; constantVals: ptr ValueRef; count: cuint): ValueRef {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -719,6 +720,7 @@ proc ll_load_dll*: bool =
     get_proc(lib, getFunctionCallConv, "LLVMGetFunctionCallConv")
 
     get_proc(lib, countBasicBlocks, "LLVMCountBasicBlocks")
+    get_proc(lib, constNamedStruct, "LLVMConstNamedStruct")
 
 # ------------------------------------------------------------------------------
 

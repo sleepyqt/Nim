@@ -148,6 +148,9 @@ proc mangle_global_var_name*(module: BModule; sym: PSym): string =
 
   assert result != ""
 
+proc mangle_rtti_name*(module: BModule; typ: PType; sig: SigHash): string =
+  result = "RTTI." & $typ.kind & "." & $sig
+
 # Scope Stack ------------------------------------------------------------------
 
 proc open_scope*(module: BModule) =
