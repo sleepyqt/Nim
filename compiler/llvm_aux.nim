@@ -1,7 +1,15 @@
-import ast, types
-import llvm_data, llvm_type
-import llvm_dll as llvm
-from platform import TSystemCPU, TSystemOS, Target
+# included from "llvm_pass.nim"
+
+proc file_info*(module: BModule; node: PNode): string =
+  let line = int node.info.line
+  let col = int node.info.col
+  let index = int node.info.fileIndex
+  let file_infos = module.module_list.config.m.fileInfos
+  let filename =
+    if index in low(file_infos) .. high(file_infos): file_infos[index].shortName
+    else: "unk"
+
+  result = "L: " & $line & ", C: " & $col & " | " & filename
 
 # ------------------------------------------------------------------------------
 
@@ -236,53 +244,6 @@ proc build_field_access*(module: BModule; object_type: PType; object_value: Valu
     var indices = [ constant(module, 0i32), constant(module, path[i].index.int32) ]
     let bitcast = llvm.buildBitCast(module.ll_builder, result, brach_type, "branch_cast")
     result = llvm.buildGEP(module.ll_builder, bitcast, addr indices[0], cuint len indices, "")
-
-# ------------------------------------------------------------------------------
-
-proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv =
-  let os = module.module_list.config.target.targetOS
-  let cpu = module.module_list.config.target.targetCPU
-
-  case cpu:
-  # ------------ i386 ------------
-  of cpuI386:
-    case os:
-    of osWindows:
-      case cc:
-      of ccDefault: result = X86StdcallCallConv
-      of ccStdCall: result = X86StdcallCallConv
-      of ccCDecl: result = CCallConv
-      of ccNoInline: result = X86StdcallCallConv
-      of ccInline: result = X86StdcallCallConv
-      of ccNoConvention: result = X86StdcallCallConv
-      else: assert false, $cc
-    of osLinux: assert false, $cc
-    of osStandalone: assert false, $cc
-    else: assert false, $cc
-  # ------------ AMD64 ------------
-  of cpuAmd64:
-    case os:
-    of osWindows:
-      case cc:
-      of ccNoConvention, ccDefault, ccStdCall, ccCDecl,
-         ccSafeCall, ccFastCall, ccNoInline, ccInline:
-        result = Win64CallConv
-      else: assert false, $cc
-    of osLinux:
-      case cc:
-      of ccNoConvention, ccDefault, ccStdCall, ccCDecl,
-         ccSafeCall, ccFastCall, ccNoInline, ccInline:
-        result = X8664SysVCallConv
-      else: assert false, $cc
-    of osStandalone:
-      case cc:
-      of ccNoConvention, ccDefault, ccStdCall,
-         ccCDecl, ccSafeCall, ccFastCall, ccNoInline, ccInline:
-        result = X8664SysVCallConv
-      else: assert false, $cc
-    else: assert false, $cc
-  # ------------  end ------------
-  else: assert false, $cc
 
 # Intrisics --------------------------------------------------------------------
 

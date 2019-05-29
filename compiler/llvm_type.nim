@@ -1,15 +1,4 @@
-import ast, types
-import llvm_data
-import llvm_dll as llvm
-from sighashes import hashType
-from magicsys import getCompilerProc
-from astalgo import debug
-
-const spam = false
-
-proc get_type*(module: BModule; typ: PType): TypeRef
-
-# ------------------------------------------------------------------------------
+# included from "llvm_pass.nim"
 
 proc `$`*(x: TypeRef): string =
   if x == nil:
@@ -20,7 +9,9 @@ proc `$`*(x: TypeRef): string =
     disposeMessage(str)
 
 proc is_signed_type*(typ: PType): bool =
-  typ.kind in {tyInt .. tyInt64}
+  assert typ != nil
+  let typ = skipTypes(typ, {tyRange})
+  result = typ.kind in {tyInt .. tyInt64}
 
 proc get_type_size*(module: BModule; typ: PType): BiggestInt =
   result = getSize(module.module_list.config, typ)
@@ -34,7 +25,9 @@ proc type_to_ptr*(value: TypeRef): TypeRef =
 # ------------------------------------------------------------------------------
 
 proc live_as_pointer*(module: BModule; typ: PType): bool =
+  # values of this type are newer loaded in registers
   result = typ.kind in {tyObject, tyArray, tyTuple, tyOpenArray}
+  result = result or (typ.kind == tySet and get_type_size(module, typ) > 8)
 
 proc get_runtime_type*(module: BModule; name: string): TypeRef =
   let sym = getCompilerProc(module.module_list.graph, name)
@@ -45,6 +38,9 @@ proc get_runtime_type*(module: BModule; name: string): TypeRef =
 
 proc expand_struct*(module: BModule; struct: TypeRef): seq[TypeRef] =
   # {i8, i16, i32} -> i8, i16, i32
+  assert struct != nil
+  echo struct
+  assert llvm.getTypeKind(struct) == StructTypeKind
   let count = int llvm.countStructElementTypes(struct)
   setLen(result, count)
   llvm.getStructElementTypes(struct, addr result[0])
@@ -72,10 +68,6 @@ proc expand_struct_to_words*(module: BModule; struct: PType): seq[TypeRef] =
     else: assert false, $size
   else:
     assert false, $size
-
-# ------------------------------------------------------------------------------
-
-import llvm_abi
 
 # Array Type -------------------------------------------------------------------
 
@@ -115,6 +107,9 @@ proc get_seq_type(module: BModule; typ: PType): TypeRef =
     result = type_to_ptr struct
 
     module.add_type(sig, result)
+
+  assert result != nil
+  assert llvm.getTypeKind(result) == PointerTypeKind
 
 proc get_unchecked_array_type(module: BModule; typ: PType): TypeRef =
   let elem_type = get_type(module, elemType(typ))
@@ -174,7 +169,7 @@ proc gen_object_fields(module: BModule; fields: var seq[TypeRef]; node: PNode) =
       elif max_align == 8: module.ll_int64
       else: module.ll_void
     if max_align != 0 and max_size != 0:
-      fields.add llvm.arrayType(elem_type, cuint (max_size div max_align))
+      fields.add llvm.arrayType(elem_type, cuint((max_size div max_align)))
   else:
     discard
 
@@ -189,7 +184,7 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
   result = module.get_type(sig)
   if result == nil:
     let name = typ.sym.name.s
-    when spam:
+    when spam_types:
       echo "== --------------------------------------------------"
       echo "== get_object_type: ", name
 
@@ -200,7 +195,7 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
     let align = get_type_align(module, typ)
     let super = if typ.sons.len == 0: nil else: typ[0]
 
-    when spam:
+    when spam_types:
       echo "== size: ", size, ", align: ", align, ", super: ", super != nil
       echo "== flags: ", if typ.sym != nil: $typ.sym.flags else: "nil"
 
@@ -218,12 +213,13 @@ proc get_object_type(module: BModule; typ: PType): TypeRef =
     if len(fields) == 0:
       fields.add module.ll_int8
 
-    let fields_ptr = if fields.len == 0: nil else: addr fields[0]
-    llvm.structSetBody(result, fields_ptr, cuint fields.len, 0)
+    llvm.structSetBody(result, addr fields[0], cuint fields.len, 0)
 
-    when spam:
+    when spam_types:
       echo "== result: ", result
       echo "== --------------------------------------------------"
+
+    fields = @[]
 
 proc get_object_case_branch_type*(module: BModule; node: PNode): TypeRef =
   var fields: seq[TypeRef]
@@ -292,6 +288,8 @@ proc get_proc_type*(module: BModule; typ: PType): TypeRef =
   # formal parameters types
   for param in typ.n.sons[1 .. ^1]:
     if isCompileTimeOnly(param.typ): continue
+
+    assert param.typ != nil
     let param_type_info = abi.classify_argument_type(module, param.typ)
 
     case param_type_info.class:
@@ -362,8 +360,10 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   ## maps nim type LLVM type
   assert module != nil
   assert typ != nil
+
   case typ.kind:
-  of tyDistinct, tyTypeDesc: result = get_type(module, typ.lastSon)
+  of tyDistinct, tyTypeDesc, tyGenericInst, tyAlias:
+    result = get_type(module, typ.lastSon)
   of tyBool: result = module.ll_mem_bool
   of tyInt, tyUint: result = module.ll_int
   of tyInt8, tyUInt8: result = module.ll_int8
@@ -388,10 +388,9 @@ proc get_type*(module: BModule; typ: PType): TypeRef =
   of tySequence: result = get_seq_type(module, typ)
   of tyOpenArray, tyVarargs: result = get_openarray_type(module, typ)
   of tyUncheckedArray: result = get_unchecked_array_type(module, typ)
-  else: echo "get_type: unknown type kind: ", typ.kind
+  else: assert false, $typ.kind
 
-  if result == nil: echo "get_type fail: ", typ.kind
-  #echo ">>>>> mapped type: ", typ.kind, " ----> ", llvm.getTypeKind(result)
+  assert result != nil, $typ.kind
 
 # ------------------------------------------------------------------------------
 
@@ -399,13 +398,22 @@ proc gen_type_info*(module: BModule; typ: PType): ValueRef =
   let sig = hashType(typ)
   result = module.get_type_info(sig)
   if result == nil:
-    echo "☭☭ --------------------------------------------------"
-    echo "☭☭ gen_type_info:   ", typ.kind
-    echo "☭☭ --------------------------------------------------"
+    when spam_types:
+      echo "☭☭ --------------------------------------------------"
+      echo "☭☭ gen_type_info:   ", typ.kind
+      echo "☭☭ --------------------------------------------------"
+
     let nim_type = get_rtti_nim_type(module)
-    #echo "TNimType: ", nim_type
+    # %TNimType = type { i64, i8, i8, %TNimType*, %TNimNode*, i8*, void (i8*, i64)*, i8* (i8*)* }
+    echo "TNimType: ", nim_type
+
+    #var fields: seq[ValueRef]
+    #let initializer = llvm.constStructInContext(module.ll_context, addr fields[0], cuint len fields, Bool 0)
 
     let initializer = llvm.constNull(nim_type)
+
+    when spam_types:
+      echo "initializer type: ", llvm.typeOf(initializer)
 
     result = llvm.addGlobal(module.ll_module, nim_type, "rtti")
 
@@ -414,3 +422,7 @@ proc gen_type_info*(module: BModule; typ: PType): ValueRef =
     llvm.setLinkage(result, PrivateLinkage)
 
     module.add_type_info(sig, result)
+
+# ------------------------------------------------------------------------------
+
+#include llvm_abi

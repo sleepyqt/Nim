@@ -56,8 +56,9 @@ proc gen_magic_append_seq_elem(module: BModule; node: PNode): ValueRef =
   echo "h ", header
   echo "h ty ", llvm.typeOf(header)
   echo "t ", type_info
-  debug node
-  assert false
+  let call = gen_call_runtime_proc(module, "incrSeqV3", @[header, type_info])
+  #debug node
+  #assert false
 
 proc gen_magic_length_seq(module: BModule; node: PNode): ValueRef =
   let struct = gen_expr(module, node[1])
@@ -166,7 +167,27 @@ proc gen_magic_chr(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
   result = llvm.buildTrunc(module.ll_builder, value, ll_type, "magic.chr")
 
-
 proc gen_magic_con_str_str(module: BModule; node: PNode): ValueRef =
   debug node
   assert false
+
+proc gen_magic_eq_str(module: BModule; node: PNode): ValueRef =
+  let lhs = gen_expr(module, node[1])
+  let rhs = gen_expr(module, node[2])
+  result = gen_call_runtime_proc(module, "eqStrings", @[lhs, rhs])
+
+proc gen_magic_le_str(module: BModule; node: PNode): ValueRef =
+  let lhs = gen_expr(module, node[1])
+  let rhs = gen_expr(module, node[2])
+  let cmp = gen_call_runtime_proc(module, "cmpStrings", @[lhs, rhs])
+  let zer = constant_int(module, 0)
+  result = llvm.buildICmp(module.ll_builder, IntSLE, cmp, zer, "")
+  result = build_i1_to_i8(module, result)
+
+proc gen_magic_lt_str(module: BModule; node: PNode): ValueRef =
+  let lhs = gen_expr(module, node[1])
+  let rhs = gen_expr(module, node[2])
+  let cmp = gen_call_runtime_proc(module, "cmpStrings", @[lhs, rhs])
+  let zer = constant_int(module, 0)
+  result = llvm.buildICmp(module.ll_builder, IntSLT, cmp, zer, "")
+  result = build_i1_to_i8(module, result)

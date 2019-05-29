@@ -436,6 +436,8 @@ var setFunctionCallConv*: proc(fn: ValueRef; cc: cuint) {.dll.}
 var setInstructionCallConv*: proc(instr: ValueRef; cc: cuint) {.dll.}
 var getFunctionCallConv*: proc(fn: ValueRef): cuint {.dll.}
 
+var countBasicBlocks*: proc(fn: ValueRef): cuint {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -447,7 +449,9 @@ proc ll_load_dll*: bool =
 
   for dll in llvm_dlls:
     lib = loadLib(dll)
-    if lib != nil: break
+    if lib != nil:
+      echo "loaded LLVM dll: ", dll
+      break
 
   if lib == nil:
     echo "can't load LLVM dll :( :: ", llvm_dlls
@@ -713,6 +717,8 @@ proc ll_load_dll*: bool =
     get_proc(lib, setFunctionCallConv, "LLVMSetFunctionCallConv")
     get_proc(lib, setInstructionCallConv, "LLVMSetInstructionCallConv")
     get_proc(lib, getFunctionCallConv, "LLVMGetFunctionCallConv")
+
+    get_proc(lib, countBasicBlocks, "LLVMCountBasicBlocks")
 
 # ------------------------------------------------------------------------------
 

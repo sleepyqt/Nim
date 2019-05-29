@@ -1,23 +1,4 @@
-import ast, types
-import llvm_data, llvm_type, llvm_aux
-import llvm_dll as llvm
-
-from lineinfos import TLineInfo
-from lowerings import lowerTupleUnpacking
-
-import astalgo
-
-proc gen_stmt*(module: BModule; node: PNode)
-proc gen_expr*(module: BModule; node: PNode): ValueRef
-proc gen_expr_lvalue*(module: BModule; node: PNode): ValueRef
-proc gen_copy*(module: BModule; dst, val: ValueRef; typ: PType)
-proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef)
-
-import llvm_proc
-
-# ------------------------------------------------------------------------------
-
-const spam = false
+# included from "llvm_pass.nim"
 
 proc gen_copy*(module: BModule; dst, val: ValueRef; typ: PType) =
   assert dst != nil
@@ -100,6 +81,7 @@ proc gen_ref_copy(module: BModule; dst, adr: ValueRef) =
 proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef) =
   assert typ != nil
   assert alloca != nil
+  assert_value_type(alloca, PointerTypeKind)
   case typ.kind:
   of tyInt, tyUint:
     discard llvm.buildStore(module.ll_builder, constant_int(module, int8 0), alloca)
@@ -125,6 +107,18 @@ proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef) =
     else:
       let adr = llvm.buildBitCast(module.ll_builder, alloca, module.ll_pointer, "")
       build_call_memset(module, adr, 0, int64 size)
+  of tyFloat, tyFloat64:
+    let zero = llvm.constReal(module.ll_float64, 0d)
+    discard llvm.buildStore(module.ll_builder, zero, alloca)
+  of tyFloat32:
+    let zero = llvm.constReal(module.ll_float32, 0d)
+    discard llvm.buildStore(module.ll_builder, zero, alloca)
+  of tyPointer, tyPtr, tyRef, tyCString, tyString, tySequence:
+    let null = llvm.constNull(get_type(module, typ))
+    discard llvm.buildStore(module.ll_builder, null, alloca)
+  of tyEnum:
+    let zero = llvm.constInt(get_type(module, typ), 0, Bool 0)
+    discard llvm.buildStore(module.ll_builder, zero, alloca)
   else: discard
 
 proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed: bool): ValueRef =
@@ -160,6 +154,18 @@ proc build_new_obj(module: BModule; dest: ValueRef; typ: PType) =
   let ref_cast_type = get_type(module, typ)
   let ref_cast = llvm.buildBitCast(module.ll_builder, allocated_ptr, ref_cast_type, "ref_cast")
   gen_ref_copy(module, dest, ref_cast)
+  #todo
+
+proc build_new_seq(module: BModule; dest: ValueRef; typ: PType; length: ValueRef) =
+  assert_value_type(dest, PointerTypeKind)
+  let type_info = gen_type_info(module, typ)
+  var args = @[type_info, length]
+  let allocated_seq = gen_call_runtime_proc(module, "newSeq", args) # i8*
+  let seq_cast_type = get_type(module, typ)
+  assert_value_type(allocated_seq, PointerTypeKind)
+  let seq_cast = llvm.buildBitCast(module.ll_builder, allocated_seq, seq_cast_type, "seq_cast")
+  gen_ref_copy(module, dest, seq_cast)
+  #todo
 
 # - Literals -------------------------------------------------------------------
 
@@ -227,10 +233,26 @@ proc gen_bracket_lvalue(module: BModule; node: PNode): ValueRef =
       let adr = llvm.buildGEP(module.ll_builder, result, addr indices[0], cuint len indices, "")
       let val = gen_expr(module, item)
       gen_copy(module, adr, val, item.typ)
+  of tySequence:
+    let length = constant_int(module, int node.sonsLen)
+    build_new_seq(module, result, node.typ, length)
+    # {{i64, i64}, i8}**
+    let seq = llvm.buildLoad(module.ll_builder, result, "")
+    # {{i64, i64}, i8}*
+    let data_ptr = build_field_ptr(module, seq, constant(module, int32 1))
+    # i8*
+    assert_value_type(data_ptr, PointerTypeKind)
+    for i, item in node.sons:
+      var indices = [ constant_int(module, 0), constant_int(module, i) ]
+      let adr = llvm.buildGEP(module.ll_builder, data_ptr, addr indices[0], cuint len indices, "")
+      let val = gen_expr(module, item)
+      gen_copy(module, adr, val, item.typ)
   else: assert false, $node.typ.kind
 
 proc gen_bracket(module: BModule; node: PNode): ValueRef =
   result = gen_bracket_lvalue(module, node)
+  if not live_as_pointer(module, node.typ):
+    result = llvm.buildLoad(module.ll_builder, result, "")
 
 proc gen_int_set_lit(module: BModule; node: PNode; size: int): ValueRef =
   let ll_type = get_type(module, node.typ)
@@ -244,6 +266,11 @@ proc gen_int_set_lit(module: BModule; node: PNode; size: int): ValueRef =
       # accum = accum or (1 shl value)
       let value = gen_expr(module, item)
       let one = llvm.constInt(ll_type, culonglong 1, Bool 0)
+      # todo
+      # nim: ../lib/IR/Constants.cpp:1842:
+      # static llvm::Constant* llvm::ConstantExpr::get(unsigned int, llvm::Constant*, llvm::Constant*, unsigned int, llvm::Type*):
+      # Assertion `C1->getType() == C2->getType()
+      # && "Operand types in binary constant expression should match"' failed.
       let bit = llvm.buildShl(module.ll_builder, one, value, "curly.bit")
       let accum_value = llvm.buildLoad(module.ll_builder, accum, "curly.accum.load")
       let merged = llvm.buildOr(module.ll_builder, accum_value, bit, "curly.merged")
@@ -377,9 +404,6 @@ proc gen_magic_length(module: BModule; node: PNode): ValueRef =
   else:
     assert false, $sym_node.typ.kind
 
-include llvm_magic_set
-include llvm_magic_string
-
 proc gen_magic_eq_proc(module: BModule; node: PNode): ValueRef =
   if node[1].typ.callConv == ccClosure:
     assert false
@@ -408,6 +432,15 @@ proc gen_magic_is_nil(module: BModule; node: PNode): ValueRef =
   let rhs = llvm.constNull(llvm.typeOf(lhs))
   result = llvm.buildICmp(module.ll_builder, IntEQ, lhs, rhs, "")
   result = build_i1_to_i8(module, result)
+
+proc gen_magic_to_float(module: BModule; node: PNode): ValueRef =
+  let value = gen_expr(module, node[1])
+  result = llvm.buildSIToFP(module.ll_builder, value, get_type(module, node.typ), "m.to.float")
+
+proc gen_magic_ord(module: BModule; node: PNode): ValueRef =
+  let value = gen_expr(module, node[1])
+  let ll_type = get_type(module, node.typ)
+  result = convert_scalar(module, value, ll_type, is_signed_type(node[1].typ))
 
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
@@ -470,7 +503,7 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
     # if x >= 0 x else: -x
     let value = gen_expr(module, node[1])
     let zero = llvm.constReal(llvm.typeOf(value), 0)
-    let neg_value = llvm.buildNeg(module.ll_builder, value, "abs.neg_value")
+    let neg_value = llvm.buildFNeg(module.ll_builder, value, "abs.neg_value")
     let cond = llvm.buildFCmp(module.ll_builder, RealOGE, value, zero, "abs.cmp")
     result = llvm.buildSelect(module.ll_builder, cond, value, neg_value, "abs.result")
 
@@ -532,6 +565,10 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mEqUntracedRef: result = cmp_int(llvm.IntEQ)
   of mLePtr: result = cmp_int(llvm.IntULE)
   of mLtPtr: result = cmp_int(llvm.IntULT)
+  # enum cmp
+  of mEqEnum: result = cmp_int(llvm.IntEQ)
+  of mLeEnum: result = cmp_int(if is_signed_type(node.typ): IntSLE else: IntULE)
+  of mLtEnum: result = cmp_int(if is_signed_type(node.typ): IntSLT else: IntULT)
   # proc cmp
   of mEqProc: result = gen_magic_eq_proc(module, node)
   #of mLeU64: discard
@@ -566,9 +603,9 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mInc: gen_magic_inc(module, node)
   of mDec: gen_magic_dec(module, node)
   of mLengthOpenArray: result = gen_magic_length(module, node)
-  of mExit: result = gen_call_runtime_proc(module, node)
   of mSwap: result = gen_magic_swap(module, node)
-  #of mOrd: discard
+  of mOrd: result = gen_magic_ord(module, node)
+  of mDotDot: result = gen_call_runtime_proc(module, node)
   # sets
   of mIncl: gen_incl_set(module, node)
   of mExcl: gen_excl_set(module, node)
@@ -589,8 +626,8 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mAppendSeqElem: result = gen_magic_append_seq_elem(module, node)
   # strings
   of mLengthStr: result = gen_magic_length_str(module, node)
-  of mNewString: result = gen_call_runtime_proc(module, node)
-  of mNewStringOfCap: result = gen_call_runtime_proc(module, node)
+  of mNewString, mNewStringOfCap, mExit, mParseBiggestFloat:
+    result = gen_call_runtime_proc(module, node)
   of mCopyStr: result = gen_call_runtime_proc(module, node)
   # of mSetLengthStr:
   # of mCopyStr:
@@ -601,10 +638,9 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mSetLengthStr: result = gen_magic_set_length_str(module, node)
   of mChr: result = gen_magic_chr(module, node)
   # of mAppendSeqElem:
-  # of mEqStr:
-  # of mLeStr:
-  # of mLtStr:
-  # of mIsNil:
+  of mEqStr: result = gen_magic_eq_str(module, node)
+  of mLeStr: result = gen_magic_le_str(module, node)
+  of mLtStr: result = gen_magic_lt_str(module, node)
   of mIntToStr: result = gen_magic_int_to_str(module, node)
   of mInt64ToStr: result = gen_magic_int64_to_str(module, node)
   of mBoolToStr: result = gen_magic_bool_to_str(module, node)
@@ -613,6 +649,8 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mCStrToStr: result = gen_magic_cstr_to_str(module, node)
   # of mStrToStr:
   # of mEnumToStr:
+  # conv
+  of mToFloat: result = gen_magic_to_float(module, node)
   else: echo "unknown magic: ", op
 
 proc gen_obj_down_conv(module: BModule; node: PNode): ValueRef =
@@ -637,10 +675,6 @@ proc gen_call(module: BModule; node: PNode): ValueRef =
     result = gen_magic_expr(module, node, node[0].sym.magic)
   else:
     result = gen_call_expr(module, node)
-
-# - Statements -----------------------------------------------------------------
-
-include llvm_stmt
 
 # ------------------------------------------------------------------------------
 
@@ -672,15 +706,23 @@ proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
 
   case node.sym.kind:
   of skVar, skForVar, skLet, skResult, skTemp:
-    result = module.get_value(node.sym)
-    if sfGlobal in node.sym.flags and result == nil:
+
+    if node.sym.name.s == "allocator":
+      echo "protofdalksdjsalkjdklsajdsad"
+      echo node.sym.info.line, " c ", node.sym.info.col
+      echo node.info.line, " c ", node.info.col
+      debug node
+
+    if {sfGlobal, sfThread} * node.sym.flags != {}:
       result = gen_var_prototype(module, node)
+    else:
+      result = module.get_value(node.sym)
   of skParam:
     result = module.get_value(node.sym)
   of skConst:
     result = gen_sym_const(module, node.sym)
   else:
-    echo "fail gen_sym_expr_lvalue: ", node.sym.kind
+    assert false, $node.sym.kind
 
   assert result != nil
   assert_value_type(result, PointerTypeKind)
@@ -703,7 +745,7 @@ proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
   of skType:
     result = gen_type_info(module, node.sym.typ)
   else:
-    echo "gen_sym_expr: unknown symbol kind: ", node.sym.kind
+    assert false, $node.sym.kind
 
   assert result != nil
 
@@ -828,8 +870,8 @@ proc gen_addr(module: BModule; node: PNode): ValueRef =
   result = gen_expr_lvalue(module, node[0])
 
 proc gen_conv(module: BModule; node: PNode): ValueRef =
-  let dst_type = node.typ
-  let src_type = node[1].typ
+  let dst_type = skipTypes(node.typ, {tyRange})
+  let src_type = skipTypes(node[1].typ, {tyRange})
   let value = gen_expr(module, node[1])
   let ll_src_type = llvm.typeOf(value)
   let ll_dst_type = get_type(module, dst_type)
@@ -840,7 +882,7 @@ proc gen_conv(module: BModule; node: PNode): ValueRef =
 
   const Integers   = {tyInt .. tyInt64}
   const Floats     = {tyFloat .. tyFloat128}
-  const Unsigned   = {tyUint .. tyUInt64}
+  const Unsigned   = {tyUint .. tyUInt64, tyChar, tyEnum}
   const Pointers   = {tyPtr, tyPointer, tyCString, tyRef}
 
   if ll_src_type == ll_dst_type:
@@ -883,7 +925,7 @@ proc gen_conv(module: BModule; node: PNode): ValueRef =
     result = llvm.buildBitCast(module.ll_builder, value, ll_dst_type, "")
 
   else:
-    echo "unsupported conv", src_type.kind, " =====> ", dst_type.kind
+    echo "unsupported conv ", src_type.kind, " =====> ", dst_type.kind
 
 proc gen_check_range_float(module: BModule; node: PNode): ValueRef =
   # todo
@@ -902,18 +944,26 @@ proc gen_check_range64(module: BModule; node: PNode): ValueRef =
   # todo
   result = gen_check_range(module, node)
 
-proc build_cast(module: BModule; value: ValueRef; dst_type: TypeRef): ValueRef =
-  let src_type = llvm.typeOf(value)
-  let src_kind = llvm.getTypeKind(src_type)
-  let dst_kind = llvm.getTypeKind(dst_type)
+proc build_cast(module: BModule; value: ValueRef; ll_dst_type: TypeRef): ValueRef =
+  let ll_src_type = llvm.typeOf(value)
+  let src_kind = llvm.getTypeKind(ll_src_type)
+  let dst_kind = llvm.getTypeKind(ll_dst_type)
   if   src_kind == PointerTypeKind and dst_kind == IntegerTypeKind:
-    result = llvm.buildPtrToInt(module.ll_builder, value, dst_type, "cast.ptr_to_int")
+    result = llvm.buildPtrToInt(module.ll_builder, value, ll_dst_type, "cast.ptr_to_int")
   elif src_kind == IntegerTypeKind and dst_kind == PointerTypeKind:
-    result = llvm.buildIntToPtr(module.ll_builder, value, dst_type, "cast.int_to_ptr")
+    result = llvm.buildIntToPtr(module.ll_builder, value, ll_dst_type, "cast.int_to_ptr")
   elif src_kind == PointerTypeKind and dst_kind == PointerTypeKind:
-    result = llvm.buildBitCast(module.ll_builder, value, dst_type, "cast.ptr_to_ptr")
+    result = llvm.buildBitCast(module.ll_builder, value, ll_dst_type, "cast.ptr_to_ptr")
+  elif ll_src_type == ll_dst_type:
+    result = value
   else:
-    module.ice("v " & $value & " s " & $src_kind & " d " & $dst_kind)
+    echo "build_cast:"
+    echo "src ty < ", ll_src_type, " >"
+    echo "dst ty < ", ll_dst_type, " >"
+    echo "value < ", value, " >"
+    echo "src_kind < ", src_kind, " >"
+    echo "dst_kind < ", dst_kind, " >"
+    assert false
 
 proc gen_cast_expr_lvalue(module: BModule; node: PNode): ValueRef =
   let value = gen_expr_lvalue(module, node[1])
@@ -929,7 +979,7 @@ proc gen_cast_expr(module: BModule; node: PNode): ValueRef =
 
 proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
   # L value, always pointer
-  #echo "gen_expr_lvalue kind: ", node.kind
+  #echo "gen_expr_lvalue kind: ", node.kind, " ", file_info(module, node)
   case node.kind:
   of nkSym:
     result = gen_sym_expr_lvalue(module, node)
@@ -951,7 +1001,7 @@ proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
 
 proc gen_expr*(module: BModule; node: PNode): ValueRef =
   # R value, can be pointer or value
-  #echo "gen_expr kind: ", node.kind
+  #echo "gen_expr kind: ", node.kind, " ", file_info(module, node)
   case node.kind:
   of nkSym:
     result = gen_sym_expr(module, node)
@@ -1000,7 +1050,7 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkIfExpr, nkIfStmt:
     result = gen_if(module, node)
   of nkWhen:
-    discard
+    result = gen_expr(module, node[1][0])
   of nkObjDownConv:
     result = gen_obj_down_conv(module, node)
   of nkObjUpConv:
@@ -1036,8 +1086,7 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkDiscardStmt:
     gen_discard(module, node)
   of nkAsmStmt:
-    # todo: debug
-    discard llvm.buildAlloca(module.ll_builder, module.ll_int32, node[0].strVal)
+    discard
   of nkTryStmt, nkHiddenTryStmt:
     gen_try(module, node)
   of nkRaiseStmt:
@@ -1049,7 +1098,7 @@ proc gen_expr*(module: BModule; node: PNode): ValueRef =
   of nkPragma:
     discard
   of nkPragmaBlock:
-    discard
+    result = gen_expr(module, node.lastSon)
   of nkProcDef, nkFuncDef, nkMethodDef, nkConverterDef:
     if node.sons[genericParamsPos].kind == nkEmpty:
       let sym = node.sons[namePos].sym

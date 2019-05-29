@@ -42,6 +42,7 @@ type
     init_proc*: ValueRef # the `main` module procedure
     sig_collisions*: CountTable[SigHash]
     ehprocs*: EHProcs
+    delayed_procs*: seq[PSym]
     # cache common types
     ll_void*, ll_mem_bool*, ll_bool*: TypeRef
     ll_char*: TypeRef
@@ -120,10 +121,7 @@ proc mangle_proc_name*(module: BModule; sym: PSym): string =
   if sfExportc in sym.flags or sfImportc in sym.flags:
     result = $sym.loc.r
   else:
-    let sig = if sym.kind in routineKinds and sym.typ != nil:
-      hashProc(sym)
-    else:
-      hashNonProc(sym)
+    let sig = hashProc(sym)
 
     result.add mangle(sym.name.s) & $sig
 
@@ -131,14 +129,24 @@ proc mangle_proc_name*(module: BModule; sym: PSym): string =
     if counter != 0: (result.add "_" & $(counter + 1))
     module.sig_collisions.inc(sig)
 
-proc mangle_local_name*(module: BModule; sym: PSym): string =
+  assert result != ""
+
+proc mangle_local_var_name*(module: BModule; sym: PSym): string =
   mangle(sym.name.s)
 
 proc mangle_global_var_name*(module: BModule; sym: PSym): string =
   if sfExportc in sym.flags or sfImportc in sym.flags:
     result = $sym.loc.r
   else:
-    result = mangle(sym.name.s)
+    let sig = hashNonProc(sym)
+
+    result.add mangle(sym.name.s) & $sig
+
+    let counter = module.sig_collisions.getOrDefault(sig)
+    if counter != 0: (result.add "_" & $(counter + 1))
+    module.sig_collisions.inc(sig)
+
+  assert result != ""
 
 # Scope Stack ------------------------------------------------------------------
 
@@ -179,6 +187,7 @@ proc add_value*(module: BModule; sym: PSym; val: ValueRef) =
 
 proc get_value*(module: BModule; sym: PSym): ValueRef =
   result = module.value_cache.get_or_default(sym.id)
+
   if result == nil:
     # same symbol may get multiple ids. Example: `newString`
     if sym.kind == skProc and sfImportc in sym.flags:
@@ -188,6 +197,7 @@ proc get_value*(module: BModule; sym: PSym): ValueRef =
     if sym.kind == skVar and sfImportc in sym.flags:
       let name = mangle_global_var_name(module, sym)
       result = llvm.getNamedGlobal(module.ll_module, name)
+
 
 proc add_type_info*(module: BModule; sig: SigHash; typ: ValueRef) =
   module.type_info_cache.add(sig, typ)

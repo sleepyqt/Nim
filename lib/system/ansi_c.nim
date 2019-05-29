@@ -33,8 +33,17 @@ proc c_abort*() {.
   importc: "abort", header: "<stdlib.h>", noSideEffect.}
 
 when defined(LLVM):
-
+  # todo: platform specific
   when defined(linux) and defined(amd64):
+    type C_JmpBuf* = array[200 div sizeof(clong), clong]
+
+  when defined(linux) and defined(i386):
+    type C_JmpBuf* = array[200 div sizeof(clong), clong]
+
+  when defined(windows) and defined(amd64):
+    type C_JmpBuf* = array[200 div sizeof(clong), clong]
+
+  when defined(windows) and defined(i386):
     type C_JmpBuf* = array[200 div sizeof(clong), clong]
 
 else:

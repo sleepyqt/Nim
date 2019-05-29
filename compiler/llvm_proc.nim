@@ -1,40 +1,15 @@
-from transf import transformBody
-from magicsys import getCompilerProc
-from astalgo import debug
-from ropes import `$`
-import ast, types
-import llvm_dll as llvm
-import llvm_data, llvm_type, llvm_expr, llvm_abi, llvm_aux
-
-const spam = false
-
-proc gen_importc_proc(module: BModule; sym: PSym): ValueRef =
-  result = module.get_value(sym)
-  if result == nil:
-    #let proc_name = $sym.loc.r
-    let proc_name = mangle_proc_name(module, sym)
-    when spam:
-      echo "## --------------------------------------------------"
-      echo "## gen_importc_proc : ", sym.name.s, " -> ", proc_name
-      echo "## id               : ", sym.id
-      echo "## flags            : ", sym.flags
-      echo "## loc flags        : ", sym.loc.flags
-      echo "## mangled name     : ", proc_name
-      echo "## --------------------------------------------------"
-    let proc_type = get_proc_type(module, sym.typ)
-    result = llvm.addFunction(module.ll_module, proc_name, proc_type)
-    llvm.setFunctionCallConv(result, cuint map_call_conv(module, sym.typ.callConv))
-    module.add_value(sym, result)
-
-# ------------------------------------------------------------------------------
+# included from "llvm_pass.nim"
 
 proc gen_proc_prototype*(module: BModule; sym: PSym): ValueRef =
   result = module.get_value(sym)
   if result == nil:
-    let proc_type  = get_proc_type(module, sym.typ)
-    let proc_name  = mangle_proc_name(module, sym)
-    let proc_val   = llvm.addFunction(module.ll_module, proc_name, proc_type)
-    when spam:
+    let proc_type = get_proc_type(module, sym.typ)
+    let proc_name = mangle_proc_name(module, sym)
+    result = llvm.addFunction(module.ll_module, proc_name, proc_type)
+    llvm.setFunctionCallConv(result, cuint map_call_conv(module, sym.typ.callConv))
+    module.add_value(sym, result)
+
+    when spam_proc:
       echo "♥♥ --------------------------------------------------"
       echo "♥♥ gen proc proto   : ", sym.name.s
       echo "♥♥ id               : ", sym.id
@@ -43,16 +18,16 @@ proc gen_proc_prototype*(module: BModule; sym: PSym): ValueRef =
       echo "♥♥ loc flags        : ", sym.loc.flags
       echo "♥♥ mangled name     : ", proc_name
       echo "♥♥ --------------------------------------------------"
-    llvm.setFunctionCallConv(proc_val, cuint map_call_conv(module, sym.typ.callConv))
-    module.add_value(sym, proc_val)
-    result = proc_val
 
-proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
-  result = module.get_value(sym)
-  if result == nil:
-    let proc_name  = mangle_proc_name(module, sym)
+proc gen_proc_body*(module: BModule; sym: PSym) =
+  assert sym != nil
+  assert sym.kind in {skProc, skFunc}
+  assert module.get_value(sym) != nil
 
-    when spam:
+  let proc_val = module.get_value(sym)
+  if llvm.countBasicBlocks(proc_val) == 0: # skip if proc already have body
+
+    when spam_proc:
       echo "** --------------------------------------------------"
       echo "** generate proc    : ", sym.name.s
       echo "** id               : ", sym.id
@@ -60,22 +35,17 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
       echo "** loc kind         : ", sym.loc.k
       echo "** loc flags        : ", sym.loc.flags
       echo "** call conv        : ", sym.typ.callConv
-      echo "** mangled name     : ", proc_name
       echo "** --------------------------------------------------"
-
-    #debug sym.ast
 
     # save current bb for nested procs
     let incoming_bb = llvm.getInsertBlock(module.ll_builder)
 
-    let proc_type  = get_proc_type(module, sym.typ)
-    let proc_val   = llvm.addFunction(module.ll_module, proc_name, proc_type)
     let ret_type   = getReturnType(sym)
     let entry_bb   = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "entry")
     let return_bb  = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "return")
     var result_var: ValueRef # addres of *result* variable
 
-    llvm.setFunctionCallConv(proc_val, cuint map_call_conv(module, sym.typ.callConv))
+    #llvm.setFunctionCallConv(proc_val, cuint map_call_conv(module, sym.typ.callConv))
 
     llvm.setLinkage(proc_val, ExternalLinkage)
     llvm.setVisibility(proc_val, DefaultVisibility)
@@ -87,8 +57,6 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
 
     if AttrUwtable in func_info.flags:
       add_function_attr(module, proc_val, module.ll_uwtable)
-
-    module.add_value(sym, proc_val)
 
     module.open_scope()
     module.top_scope.proc_val = proc_val
@@ -145,7 +113,7 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
     for ast_param in sym.typ.n.sons[1 .. ^1]:
       let arg_info = abi.classify_argument_type(module, ast_param.typ)
 
-      when spam:
+      when spam_proc:
         echo "** param: ", ast_param.sym.name.s, ", type: ", ast_param.typ.kind, ", class: ", arg_info.class
 
       case arg_info.class
@@ -260,22 +228,22 @@ proc gen_proc_body*(module: BModule; sym: PSym): ValueRef =
 
     llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
 
-    result = proc_val
-
-    #echo "###################### VERIFYING PROC ", sym.name.s, " #############################"
-    #viewFunctionCFG(proc_val)
-    #discard verifyFunction(proc_val, PrintMessageAction)
-    #echo ""
-    #echo "******* end gen_proc: ", sym.name.s, " *******"
 
 proc gen_proc*(module: BModule; sym: PSym): ValueRef =
   if (sfBorrow in sym.flags) or (sym.typ == nil): return
 
+  if lfImportCompilerProc in sym.loc.flags:
+    assert false
+
+  assert sfForward notin sym.flags
+
   if sfImportc in sym.flags:
-    result = gen_importc_proc(module, sym)
+    result = gen_proc_prototype(module, sym)
   else:
     let target = find_module(module, sym)
-    discard gen_proc_body(target, sym)
+    discard gen_proc_prototype(target, sym)
+    gen_proc_body(target, sym)
+
     result = gen_proc_prototype(module, sym)
 
 # ------------------------------------------------------------------------------
@@ -304,7 +272,10 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
   var ret_info: ArgInfo
   var ll_args: seq[ValueRef]
 
-  let cc = llvm.getFunctionCallConv(callee)
+  let cc = if llvm.getTypeKind(llvm.typeOf(callee)) == FunctionTypeKind:
+    llvm.getFunctionCallConv(callee)
+  else:
+    cuint map_call_conv(module, proc_type.callConv)
 
   if ret_type == nil:
     discard
@@ -361,6 +332,11 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
       let arg_copy    = build_entry_alloca(module, ll_arg_type, "arg_copy")
       gen_copy(module, arg_copy, arg_value, arg_type)
       if ExpandToWords in arg_info.flags:
+        # {i32, i32, i32, i32}
+        # @foo(i64, i64)
+        # %arg_copy
+        # bitcast {i32, i32, i32, i32}* -> {i64, i64}*
+        # pass i64, i64 to function
         var expanded     = expand_struct_to_words(module, arg_type)
         let bitcast_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool 0)
         let abi_cast     = llvm.buildBitCast(module.ll_builder, arg_copy, type_to_ptr bitcast_type, "abi_cast")
@@ -369,7 +345,14 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
           let adr = llvm.buildGEP(module.ll_builder, abi_cast, addr indices[0], 2, "")
           ll_args.add llvm.buildLoad(module.ll_builder, adr, "")
       else:
+        # {i32, i32, i32, i32}
+        # @foo(i32, i32, i32, i32)
         var expanded = expand_struct(module, ll_arg_type)
+        for i, item in expanded:
+          var indices = [constant(module, 0i32), constant(module, int32 i)]
+          let adr = llvm.buildGEP(module.ll_builder, arg_copy, addr indices[0], 2, "")
+          ll_args.add llvm.buildLoad(module.ll_builder, adr, "")
+
     of ArgClass.Ignore:
       discard
     of ArgClass.OpenArray:
@@ -421,19 +404,17 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
 
 proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
   let cc = node[0].typ.callConv
+  let callee = gen_expr(module, node[0])
 
-  when spam:
-    let sym = if node[0].kind == nkHiddenDeref: node[0][0].sym else: node[0].sym
-    echo "++ --------------------------------------------------"
-    echo "++ gen_call_expr    : ", sym.name.s, " ", node.kind
-    echo "++ sym.flags        : ", sym.flags
-    echo "++ call conv        : ", cc
-    echo "++ --------------------------------------------------"
+  when spam_proc:
+    if node[0].kind == nkSym:
+      echo "++ --------------------------------------------------"
+      echo "++ gen_call_expr    : ", node[0].sym.name.s, " ", node.kind
+      echo "++ call conv        : ", cc
+      echo "++ --------------------------------------------------"
 
   var arguments: seq[ValueRef]
   var arguments_types: seq[PType]
-
-  let callee = gen_expr(module, node[0])
 
   for arg in node.sons[1 .. ^1]:
     let value = gen_expr(module, arg)
@@ -446,30 +427,42 @@ proc gen_call_expr*(module: BModule; node: PNode): ValueRef =
 # ------------------------------------------------------------------------------
 
 proc gen_call_runtime_proc*(module: BModule; name: string; arguments: seq[ValueRef]): ValueRef =
-  #echo "gen_call_runtime_proc:"
-  let sym = module.module_list.graph.getCompilerProc(name)
+  let compiler_proc = module.module_list.graph.getCompilerProc(name)
 
-  if sym == nil:
+  if compiler_proc == nil:
     module.ice("gen_call_runtime_proc: compilerProc missing: " & name)
 
-  var arguments_types: seq[PType] = sym.typ.sons[1 .. ^1]
-  let proc_type = sym.typ
-  let callee = gen_proc(module, sym)
+  assert lfNoDecl notin compiler_proc.loc.flags
+
+  var arguments_types: seq[PType] = compiler_proc.typ.sons[1 .. ^1]
+  let proc_type = compiler_proc.typ
+
+  let target = find_module(module, compiler_proc)
+  discard gen_proc_prototype(target, compiler_proc)
+  target.delayed_procs.add(compiler_proc); echo "a proc delayed: ", compiler_proc.name.s
+  let callee = gen_proc_prototype(module, compiler_proc)
 
   assert arguments.len == arguments_types.len
 
   result = build_call(module, proc_type, callee, arguments, arguments_types)
 
 proc gen_call_runtime_proc*(module: BModule; node: PNode): ValueRef =
+  assert node.kind in nkCallKinds
+
   let proc_sym = node[namePos].sym
 
   if lfNoDecl notin proc_sym.loc.flags:
-    let sym = module.module_list.graph.getCompilerProc($proc_sym.loc.r)
+    let compiler_proc = module.module_list.graph.getCompilerProc($proc_sym.loc.r)
 
-    if sym == nil:
+    if compiler_proc == nil:
       module.ice("gen_call_runtime_proc: compilerProc missing: " & $proc_sym.loc.r)
 
-    discard gen_proc(module, sym)
+    # call to magic proc may produce broken code (globals used before declarations etc..)
+    # so delay generation of their code
+    let target = find_module(module, compiler_proc)
+    discard gen_proc_prototype(target, compiler_proc)
+    target.delayed_procs.add(compiler_proc); echo "b proc delayed: ", compiler_proc.name.s
+    result = gen_proc_prototype(module, compiler_proc)
 
   result = gen_call_expr(module, node)
 

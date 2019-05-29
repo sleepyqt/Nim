@@ -1,12 +1,56 @@
-import ast, idents, options
+import ast, idents, options, types
+
 from passes import makePass, skipCodegen
 from transf import transformStmt
 from modulegraphs import PPassContext, ModuleGraph
 from platform import TSystemCPU, TSystemOS, Target
 from pathutils import changeFileExt, `$`
 from extccomp import addFileToCompile
-import llvm_data, llvm_expr, llvm_aux
+from lineinfos import TFileInfo, MsgConfig, TLineInfo
+from magicsys import getCompilerProc
+from astalgo import debug
+from sighashes import hashType
+from lowerings import lowerTupleUnpacking
+from transf import transformBody
+from ropes import `$`
+
+import llvm_data
 import llvm_dll as llvm
+
+# ------------------------------------------------------------------------------
+
+const spam_var = false
+const spam_types = false
+const spam_proc = false
+
+# ------------------------------------------------------------------------------
+
+proc get_type*(module: BModule; typ: PType): TypeRef
+proc get_type_size*(module: BModule; typ: PType): BiggestInt
+proc get_type_align*(module: BModule; typ: PType): BiggestInt
+proc type_to_ptr*(value: TypeRef): TypeRef
+proc get_object_case_branch_type*(module: BModule; node: PNode): TypeRef
+proc expand_struct_to_words*(module: BModule; struct: PType): seq[TypeRef]
+proc expand_struct*(module: BModule; struct: TypeRef): seq[TypeRef]
+
+proc gen_stmt*(module: BModule; node: PNode)
+proc gen_expr*(module: BModule; node: PNode): ValueRef
+proc gen_expr_lvalue*(module: BModule; node: PNode): ValueRef
+proc gen_copy*(module: BModule; dst, val: ValueRef; typ: PType)
+proc gen_default_init*(module: BModule; typ: PType; alloca: ValueRef)
+proc build_cstring_lit(module: BModule; text: string): ValueRef
+proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed: bool): ValueRef
+
+# ------------------------------------------------------------------------------
+
+include llvm_aux
+include llvm_abi
+include llvm_type
+include llvm_proc
+include llvm_magic_set
+include llvm_magic_string
+include llvm_stmt
+include llvm_expr
 
 # Codegen Setup ----------------------------------------------------------------
 
@@ -17,8 +61,8 @@ proc select_target_triple(target: Target): string =
   else: assert false
 
   case target.targetOS:
-  of osWindows:    result.add "pc-windows-msvc"
-  of osLinux:      result.add "pc-linux-gnu"
+  of osWindows:    result.add "unknown-windows-gnu"
+  of osLinux:      result.add "unknown-linux-gnu"
   of osMacosx:     result.add "apple-darwin"
   of osStandalone: result.add "pc-unknown-gnu"
   else: assert(false, "unsupported OS")
@@ -326,6 +370,14 @@ proc llWriteModules*(backend: RootRef, config: ConfigRef) =
 
   when true:
     let mod_list = BModuleList(backend)
+
+    for module in mod_list.closed_modules:
+      while module.delayed_procs.len > 0:
+        let delayed_proc = module.delayed_procs.pop
+        assert delayed_proc != nil
+        gen_proc_body(module, delayed_proc)
+
+      assert module.delayed_procs.len == 0
 
     for module in mod_list.closed_modules:
       let config = module.module_list.config

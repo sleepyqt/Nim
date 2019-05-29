@@ -1,21 +1,10 @@
-import ast, types
-import llvm_data
-import llvm_dll as llvm
-
-# ------------------------------------------------------------------------------
+# included from "llvm_pass.nim"
 
 type ArgClass* = enum
-  # Passed directly in register
-  Direct
-
-  # Passed indirectly via a pointer
-  Indirect
-
-  # object or tuple expandend into consecutive arguments
-  Expand
-
+  Direct # Passed directly in register
+  Indirect # Passed indirectly via a pointer
+  Expand # object or tuple expandend into consecutive arguments
   Ignore
-
   OpenArray
 
 type ArgFlag* = enum
@@ -36,17 +25,17 @@ type FuncInfo* = object
 type BaseAbi* = ref object of RootObj
 
 method classify_argument_type*(abi: BaseAbi; module: BModule; typ: PType): ArgInfo {.base.} =
-  discard
+  assert false
 
 method classify_return_type*(abi: BaseAbi; module: BModule; typ: PType): ArgInfo {.base.} =
-  discard
+  assert false
 
 method get_func_info*(abi: BaseAbi): FuncInfo {.base.} =
-  discard
+  assert false
 
-# ------------------------------------------------------------------------------
+proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv
 
-import llvm_type
+proc get_abi*(module: BModule): BaseAbi
 
 # ------------------------------------------------------------------------------
 
@@ -258,7 +247,15 @@ method get_func_info*(abi: Amd64AbiWindows): FuncInfo =
 
 type X86Abi* = ref object of BaseAbi
 
-proc x86_can_expand(struct: PType): bool =
+proc x86_can_expand(module: BModule; struct: PType): bool =
+  let ll_type = get_type(module, struct)
+
+  let expandend = expand_struct(module, ll_type)
+  for item in expandend:
+    let kind = llvm.getTypeKind(item)
+    if kind != IntegerTypeKind: return false
+    if llvm.getIntTypeWidth(item) notin [cuint 32, 64]: return false
+
   result = true
 
 method classify_argument_type*(abi: X86Abi; module: BModule; typ: PType): ArgInfo =
@@ -268,7 +265,7 @@ method classify_argument_type*(abi: X86Abi; module: BModule; typ: PType): ArgInf
     result.class = ArgClass.Indirect
 
   of tyObject, tyTuple:
-    if x86_can_expand(typ):
+    if x86_can_expand(module, typ):
       result.class = ArgClass.Expand
     else:
       result.class = ArgClass.Indirect
@@ -345,3 +342,83 @@ proc get_abi*(module: BModule): BaseAbi =
   of PlatformABI.AMD64_Windows:   result = Amd64AbiWindows()
   of PlatformABI.X86:             result = X86Abi()
   of PlatformABI.Generic:         result = GenericAbi()
+
+# ------------------------------------------------------------------------------
+
+proc map_call_conv*(module: BModule; cc: TCallingConvention): llvm.CallConv =
+  let os = module.module_list.config.target.targetOS
+  let cpu = module.module_list.config.target.targetCPU
+
+  case cpu:
+
+  of cpuI386:
+    case os:
+    of osWindows:
+      case cc:
+      of ccDefault:       result = X86StdcallCallConv
+      of ccStdCall:       result = X86StdcallCallConv
+      of ccCDecl:         result = CCallConv
+      of ccSafeCall:      result = X86StdcallCallConv
+      of ccSysCall:       result = X86StdcallCallConv
+      of ccInline:        result = X86StdcallCallConv
+      of ccNoInline:      result = X86StdcallCallConv
+      of ccFastCall:      result = X86FastcallCallConv
+      of ccClosure:       result = X86StdcallCallConv
+      of ccNoConvention:  result = X86StdcallCallConv
+    of osLinux:
+      case cc:
+      of ccDefault:       result = CCallConv
+      of ccStdCall:       result = X86StdcallCallConv
+      of ccCDecl:         result = CCallConv
+      of ccSafeCall:      result = CCallConv
+      of ccSysCall:       result = CCallConv
+      of ccInline:        result = CCallConv
+      of ccNoInline:      result = CCallConv
+      of ccFastCall:      result = X86FastcallCallConv
+      of ccClosure:       result = CCallConv
+      of ccNoConvention:  result = CCallConv
+    else: assert false, $cc
+  # i386
+
+  of cpuAmd64:
+    case os:
+    of osWindows:
+      case cc:
+      of ccDefault:       result = Win64CallConv
+      of ccStdCall:       result = Win64CallConv
+      of ccCDecl:         result = Win64CallConv
+      of ccSafeCall:      result = Win64CallConv
+      of ccSysCall:       result = Win64CallConv
+      of ccInline:        result = Win64CallConv
+      of ccNoInline:      result = Win64CallConv
+      of ccFastCall:      result = Win64CallConv
+      of ccClosure:       result = Win64CallConv
+      of ccNoConvention:  result = Win64CallConv
+    of osLinux:
+      case cc:
+      of ccDefault:       result = X8664SysVCallConv
+      of ccStdCall:       result = X8664SysVCallConv
+      of ccCDecl:         result = X8664SysVCallConv
+      of ccSafeCall:      result = X8664SysVCallConv
+      of ccSysCall:       result = X8664SysVCallConv
+      of ccInline:        result = X8664SysVCallConv
+      of ccNoInline:      result = X8664SysVCallConv
+      of ccFastCall:      result = X8664SysVCallConv
+      of ccClosure:       result = X8664SysVCallConv
+      of ccNoConvention:  result = X8664SysVCallConv
+    of osStandalone:
+      case cc:
+      of ccDefault:       result = X8664SysVCallConv
+      of ccStdCall:       result = X8664SysVCallConv
+      of ccCDecl:         result = X8664SysVCallConv
+      of ccSafeCall:      result = X8664SysVCallConv
+      of ccSysCall:       result = X8664SysVCallConv
+      of ccInline:        result = X8664SysVCallConv
+      of ccNoInline:      result = X8664SysVCallConv
+      of ccFastCall:      result = X8664SysVCallConv
+      of ccClosure:       result = X8664SysVCallConv
+      of ccNoConvention:  result = X8664SysVCallConv
+    else: assert false, $cc
+  # amd64
+
+  else: assert false, $cc

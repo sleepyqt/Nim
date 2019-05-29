@@ -72,7 +72,6 @@ when not defined(leanCompiler):
     finishDoc2Pass(graph.config.projectName)
 
 proc commandCompileToLL(graph: ModuleGraph) =
-  echo "commandCompileToLL"
   let conf = graph.config
 
   var llLoaded = llInit(conf)

@@ -1,4 +1,4 @@
-# included from llvm_expr.nim
+# included from "llvm_pass.nim"
 
 proc gen_asgn(module: BModule; node: PNode) =
   let lhs = gen_expr_lvalue(module, node[0])
@@ -8,36 +8,41 @@ proc gen_asgn(module: BModule; node: PNode) =
   gen_copy(module, lhs, rhs, node[0].typ)
 
 proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
-  let ll_type = get_type(module, sym.typ)
-  let name = mangle_global_var_name(module, sym)
+  let target = find_module(module, sym)
+  result = target.get_value(sym)
+  if result == nil:
+    let ll_type = get_type(target, sym.typ)
+    let name = mangle_global_var_name(target, sym)
 
-  when spam:
-    echo "☺☺ --------------------------------------------------"
-    echo "☺☺ build_global_var : ", sym.name.s
-    echo "☺☺ mangled name     : ", name
-    echo "☺☺ id               : ", sym.id
-    echo "☺☺ flags            : ", sym.flags
-    echo "☺☺ --------------------------------------------------"
+    when spam_var:
+      echo "☺☺ --------------------------------------------------"
+      echo "☺☺ build_global_var : ", sym.name.s
+      echo "☺☺ mangled name     : ", name
+      echo "☺☺ id               : ", sym.id
+      echo "☺☺ flags            : ", sym.flags
+      echo "☺☺ loc flags        : ", sym.loc.flags
+      echo "☺☺ --------------------------------------------------"
 
-  result = llvm.addGlobal(module.ll_module, ll_type, name)
-  llvm.setInitializer(result, llvm.constNull(ll_type))
+    result = llvm.addGlobal(target.ll_module, ll_type, name)
+    target.add_value(sym, result)
 
-  llvm.setVisibility(result, DefaultVisibility)
+    llvm.setInitializer(result, llvm.constNull(ll_type))
+    llvm.setVisibility(result, DefaultVisibility)
 
-  if initializer == nil or initializer.kind == nkEmpty:
-    gen_default_init(module, sym.typ, result)
-  else:
-    let value = gen_expr(module, initializer)
-    assert value != nil, $initializer.kind
-    assert result != nil
-    gen_copy(module, result, value, initializer.typ)
-  module.add_value(sym, result)
+    if initializer == nil or initializer.kind == nkEmpty:
+      discard
+    else:
+      let value = gen_expr(target, initializer)
+      assert value != nil, $initializer.kind
+      assert result != nil
+      gen_copy(target, result, value, initializer.typ)
 
 proc build_local_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
   let ll_type = get_type(module, sym.typ)
-  let name = mangle_local_name(module, sym)
+  let name = mangle_local_var_name(module, sym)
 
   result = build_entry_alloca(module, ll_type, name)
+  module.add_value(sym, result)
 
   if initializer == nil or initializer.kind == nkEmpty:
     gen_default_init(module, sym.typ, result)
@@ -46,24 +51,29 @@ proc build_local_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
     assert value != nil, $initializer.kind
     assert result != nil
     gen_copy(module, result, value, initializer.typ)
-  module.add_value(sym, result)
 
 proc gen_var_prototype(module: BModule; node: PNode): ValueRef =
   let sym = node.sym
-  let typ = node.sym.typ
-  let ll_type = get_type(module, typ)
-  let name = mangle_global_var_name(module, sym)
-  let global = llvm.addGlobal(module.ll_module, ll_type, name)
+  result = module.get_value(sym)
+  if (result == nil):# and (lfNoDecl notin sym.loc.flags) and (sym.owner.id != module.module_sym.id):
+    let ll_type = get_type(module, node.sym.typ)
+    let name = mangle_global_var_name(module, sym)
+    result = llvm.addGlobal(module.ll_module, ll_type, name)
+    module.add_value(sym, result)
+    llvm.setLinkage(result, ExternalLinkage)
 
-  when spam:
-    echo "%% --------------------------------------------------"
-    echo "%% gen_var_prototype: ", sym.name.s
-    echo "%% mangled name     : ", name
-    echo "%% llvm type        : ", ll_type
-    echo "%% --------------------------------------------------"
+    when spam_var:
+      echo "%% --------------------------------------------------"
+      echo "%% gen_var_prototype: ", sym.name.s
+      echo "%% mangled name     : ", name
+      echo "%% id               : ", sym.id
+      echo "%% llvm type        : ", ll_type
+      echo "%% loc flags        : ", sym.loc.flags
+      echo "%% owner id         : ", sym.owner.id
+      echo "%% module id        : ", module.module_sym.id
+      echo "%% --------------------------------------------------"
 
-  llvm.setLinkage(global, ExternalLinkage)
-  result = global
+  assert result != nil
 
 proc gen_closure_var(module: BModule; node: PNode) =
   debug node
@@ -101,6 +111,10 @@ proc gen_tuple_var(module: BModule; node: PNode) =
 
 proc gen_single_var(module: BModule; node: PNode) =
   let sym = node[0].sym
+
+  if sym.name.s == "allocator":
+    echo "holy shit it cursed:("
+    debug node
 
   if (sfCompileTime notin sym.flags) and (lfNoDecl notin sym.loc.flags):
     if sfGlobal in sym.flags:
@@ -643,4 +657,3 @@ proc gen_case_stmt(module: BModule; node: PNode) =
       #gen_case_stmt_ordinal(module, node) # todo
 
 # ------------------------------------------------------------------------------
-
