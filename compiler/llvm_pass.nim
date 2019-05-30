@@ -360,11 +360,16 @@ proc run_verify_pass(module: BModule): bool =
 
 proc run_opt_speed_pass(module: BModule) =
   let pm = llvm.createPassManager()
+  llvm.addFunctionAttrsPass(pm)
+  llvm.addFunctionInliningPass(pm)
+  llvm.addScalarReplAggregatesPassSSA(pm)
   llvm.addPromoteMemoryToRegisterPass(pm)
-  #llvm.addInstructionCombiningPass(pm)
-  #llvm.addReassociatePass(pm)
-  #llvm.addNewGVNPass(pm)
+  llvm.addInstructionCombiningPass(pm)
   llvm.addCFGSimplificationPass(pm)
+  llvm.addReassociatePass(pm)
+  llvm.addNewGVNPass(pm)
+  llvm.addCFGSimplificationPass(pm)
+  llvm.addLoopRotatePass(pm)
   discard llvm.runPassManager(pm, module.ll_module)
 
 proc llWriteModules*(backend: RootRef, config: ConfigRef) =

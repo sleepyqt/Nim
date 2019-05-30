@@ -372,13 +372,9 @@ var getEnumAttributeKindForName*: proc(name: cstring; sLen: csize): cuint {.dll.
 var createEnumAttribute*: proc(c: ContextRef; kindID: cuint; val: uint64): AttributeRef {.dll.}
 
 var addPromoteMemoryToRegisterPass*: proc(pm: PassManagerRef) {.dll.}
-var addCFGSimplificationPass*: proc(pm: PassManagerRef) {.dll.}
-var addReassociatePass*: proc(pm: PassManagerRef) {.dll.}
-var addInstructionCombiningPass*: proc(pm: PassManagerRef) {.dll.}
 var createPassManager*: proc(): PassManagerRef {.dll.}
 var runPassManager*: proc(pm: PassManagerRef; m: ModuleRef): Bool {.dll.}
 var disposePassManager*: proc(pm: PassManagerRef) {.dll.}
-var addNewGVNPass*: proc(pm: PassManagerRef) {.dll.}
 
 var instructionEraseFromParent*: proc(inst: ValueRef) {.dll.}
 var getInstructionOpcode*: proc(inst: ValueRef): Opcode {.dll.}
@@ -438,6 +434,70 @@ var getFunctionCallConv*: proc(fn: ValueRef): cuint {.dll.}
 
 var countBasicBlocks*: proc(fn: ValueRef): cuint {.dll.}
 var constNamedStruct*: proc(structTy: TypeRef; constantVals: ptr ValueRef; count: cuint): ValueRef {.dll.}
+
+# scalar
+var addAggressiveDCEPass*: proc(pm: PassManagerRef) {.dll.}
+var addBitTrackingDCEPass*: proc(pm: PassManagerRef) {.dll.}
+var addAlignmentFromAssumptionsPass*: proc(pm: PassManagerRef) {.dll.}
+var addCFGSimplificationPass*: proc(pm: PassManagerRef) {.dll.}
+var addDeadStoreEliminationPass*: proc(pm: PassManagerRef) {.dll.}
+var addScalarizerPass*: proc(pm: PassManagerRef) {.dll.}
+var addMergedLoadStoreMotionPass*: proc(pm: PassManagerRef) {.dll.}
+var addGVNPass*: proc(pm: PassManagerRef) {.dll.}
+var addNewGVNPass*: proc(pm: PassManagerRef) {.dll.}
+var addIndVarSimplifyPass*: proc(pm: PassManagerRef) {.dll.}
+var addInstructionCombiningPass*: proc(pm: PassManagerRef) {.dll.}
+var addJumpThreadingPass*: proc(pm: PassManagerRef) {.dll.}
+var addLICMPass*: proc(pm: PassManagerRef) {.dll.}
+var addLoopDeletionPass*: proc(pm: PassManagerRef) {.dll.}
+var addLoopIdiomPass*: proc(pm: PassManagerRef) {.dll.}
+var addLoopRotatePass*: proc(pm: PassManagerRef) {.dll.}
+var addLoopRerollPass*: proc(pm: PassManagerRef) {.dll.}
+var addLoopUnrollPass*: proc(pm: PassManagerRef) {.dll.}
+var addLoopUnrollAndJamPass*: proc(pm: PassManagerRef) {.dll.}
+var addLoopUnswitchPass*: proc(pm: PassManagerRef) {.dll.}
+var addLowerAtomicPass*: proc(pm: PassManagerRef) {.dll.}
+var addMemCpyOptPass*: proc(pm: PassManagerRef) {.dll.}
+var addPartiallyInlineLibCallsPass*: proc(pm: PassManagerRef) {.dll.}
+var addReassociatePass*: proc(pm: PassManagerRef) {.dll.}
+var addSCCPPass*: proc(pm: PassManagerRef) {.dll.}
+var addScalarReplAggregatesPass*: proc(pm: PassManagerRef) {.dll.}
+var addScalarReplAggregatesPassSSA*: proc(pm: PassManagerRef) {.dll.}
+var addScalarReplAggregatesPassWithThreshold*: proc(pm: PassManagerRef, threshold: cint) {.dll.}
+var addSimplifyLibCallsPass*: proc(pm: PassManagerRef) {.dll.}
+var addTailCallEliminationPass*: proc(pm: PassManagerRef) {.dll.}
+var addConstantPropagationPass*: proc(pm: PassManagerRef) {.dll.}
+var addDemoteMemoryToRegisterPass*: proc(pm: PassManagerRef) {.dll.}
+var addVerifierPass*: proc(pm: PassManagerRef) {.dll.}
+var addCorrelatedValuePropagationPass*: proc(pm: PassManagerRef) {.dll.}
+var addEarlyCSEPass*: proc(pm: PassManagerRef) {.dll.}
+var addEarlyCSEMemSSAPass*: proc(pm: PassManagerRef) {.dll.}
+var addLowerExpectIntrinsicPass*: proc(pm: PassManagerRef) {.dll.}
+var addTypeBasedAliasAnalysisPass*: proc(pm: PassManagerRef) {.dll.}
+var addScopedNoAliasAAPass*: proc(pm: PassManagerRef) {.dll.}
+var addBasicAliasAnalysisPass*: proc(pm: PassManagerRef) {.dll.}
+var addUnifyFunctionExitNodesPass*: proc(pm: PassManagerRef) {.dll.}
+
+# IPO
+var addArgumentPromotionPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddArgumentPromotionPass
+var addConstantMergePass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddConstantMergePass
+var addCalledValuePropagationPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddCalledValuePropagationPass
+var addDeadArgEliminationPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddDeadArgEliminationPass
+var addFunctionAttrsPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddFunctionAttrsPass
+var addFunctionInliningPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddFunctionInliningPass
+var addAlwaysInlinerPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddAlwaysInlinerPass
+var addGlobalDCEPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddGlobalDCEPass
+var addGlobalOptimizerPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddGlobalOptimizerPass
+var addIPConstantPropagationPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddIPConstantPropagationPass
+var addPruneEHPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddPruneEHPass
+var addIPSCCPPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddIPSCCPPass
+var addInternalizePass*: proc(pm: PassManagerRef; allButMain: cuint) {.dll.} # LLVMAddInternalizePass
+var addStripDeadPrototypesPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddStripDeadPrototypesPass
+var addStripSymbolsPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddStripSymbolsPass
+
+# Vectorize
+var addLoopVectorizePass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddLoopVectorizePass
+var addSLPVectorizePass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddSLPVectorizePass
 
 # ------------------------------------------------------------------------------
 
@@ -652,13 +712,9 @@ proc ll_load_dll*: bool =
     get_proc(lib, createEnumAttribute, "LLVMCreateEnumAttribute")
 
     get_proc(lib, addPromoteMemoryToRegisterPass, "LLVMAddPromoteMemoryToRegisterPass")
-    get_proc(lib, addCFGSimplificationPass, "LLVMAddCFGSimplificationPass")
-    get_proc(lib, addReassociatePass, "LLVMAddReassociatePass")
-    get_proc(lib, addInstructionCombiningPass,"LLVMAddInstructionCombiningPass")
     get_proc(lib, createPassManager, "LLVMCreatePassManager")
     get_proc(lib, runPassManager, "LLVMRunPassManager")
     get_proc(lib, disposePassManager, "LLVMDisposePassManager")
-    get_proc(lib, addNewGVNPass, "LLVMAddNewGVNPass")
 
     get_proc(lib, instructionEraseFromParent, "LLVMInstructionEraseFromParent")
     get_proc(lib, getInstructionOpcode, "LLVMGetInstructionOpcode")
@@ -721,6 +777,67 @@ proc ll_load_dll*: bool =
 
     get_proc(lib, countBasicBlocks, "LLVMCountBasicBlocks")
     get_proc(lib, constNamedStruct, "LLVMConstNamedStruct")
+
+    get_proc(lib, addAggressiveDCEPass, "LLVMAddAggressiveDCEPass")
+    get_proc(lib, addBitTrackingDCEPass, "LLVMAddBitTrackingDCEPass")
+    get_proc(lib, addAlignmentFromAssumptionsPass, "LLVMAddAlignmentFromAssumptionsPass")
+    get_proc(lib, addCFGSimplificationPass, "LLVMAddCFGSimplificationPass")
+    get_proc(lib, addDeadStoreEliminationPass, "LLVMAddDeadStoreEliminationPass")
+    get_proc(lib, addScalarizerPass, "LLVMAddScalarizerPass")
+    get_proc(lib, addMergedLoadStoreMotionPass, "LLVMAddMergedLoadStoreMotionPass")
+    get_proc(lib, addGVNPass, "LLVMAddGVNPass")
+    get_proc(lib, addNewGVNPass, "LLVMAddNewGVNPass")
+    get_proc(lib, addIndVarSimplifyPass, "LLVMAddIndVarSimplifyPass")
+    get_proc(lib, addInstructionCombiningPass, "LLVMAddInstructionCombiningPass")
+    get_proc(lib, addJumpThreadingPass, "LLVMAddJumpThreadingPass")
+    get_proc(lib, addLICMPass, "LLVMAddLICMPass")
+    get_proc(lib, addLoopDeletionPass, "LLVMAddLoopDeletionPass")
+    get_proc(lib, addLoopIdiomPass, "LLVMAddLoopIdiomPass")
+    get_proc(lib, addLoopRotatePass, "LLVMAddLoopRotatePass")
+    get_proc(lib, addLoopRerollPass, "LLVMAddLoopRerollPass")
+    get_proc(lib, addLoopUnrollPass, "LLVMAddLoopUnrollPass")
+    get_proc(lib, addLoopUnrollAndJamPass, "LLVMAddLoopUnrollAndJamPass")
+    get_proc(lib, addLoopUnswitchPass, "LLVMAddLoopUnswitchPass")
+    get_proc(lib, addLowerAtomicPass, "LLVMAddLowerAtomicPass")
+    get_proc(lib, addMemCpyOptPass, "LLVMAddMemCpyOptPass")
+    get_proc(lib, addPartiallyInlineLibCallsPass, "LLVMAddPartiallyInlineLibCallsPass")
+    get_proc(lib, addReassociatePass, "LLVMAddReassociatePass")
+    get_proc(lib, addSCCPPass, "LLVMAddSCCPPass")
+    get_proc(lib, addScalarReplAggregatesPass, "LLVMAddScalarReplAggregatesPass")
+    get_proc(lib, addScalarReplAggregatesPassSSA, "LLVMAddScalarReplAggregatesPassSSA")
+    get_proc(lib, addScalarReplAggregatesPassWithThreshold, "LLVMAddScalarReplAggregatesPassWithThreshold")
+    get_proc(lib, addSimplifyLibCallsPass, "LLVMAddSimplifyLibCallsPass")
+    get_proc(lib, addTailCallEliminationPass, "LLVMAddTailCallEliminationPass")
+    get_proc(lib, addConstantPropagationPass, "LLVMAddConstantPropagationPass")
+    get_proc(lib, addDemoteMemoryToRegisterPass, "LLVMAddDemoteMemoryToRegisterPass")
+    get_proc(lib, addVerifierPass, "LLVMAddVerifierPass")
+    get_proc(lib, addCorrelatedValuePropagationPass, "LLVMAddCorrelatedValuePropagationPass")
+    get_proc(lib, addEarlyCSEPass, "LLVMAddEarlyCSEPass")
+    get_proc(lib, addEarlyCSEMemSSAPass, "LLVMAddEarlyCSEMemSSAPass")
+    get_proc(lib, addLowerExpectIntrinsicPass, "LLVMAddLowerExpectIntrinsicPass")
+    get_proc(lib, addTypeBasedAliasAnalysisPass, "LLVMAddTypeBasedAliasAnalysisPass")
+    get_proc(lib, addScopedNoAliasAAPass, "LLVMAddScopedNoAliasAAPass")
+    get_proc(lib, addBasicAliasAnalysisPass, "LLVMAddBasicAliasAnalysisPass")
+    get_proc(lib, addUnifyFunctionExitNodesPass, "LLVMAddUnifyFunctionExitNodesPass")
+
+    get_proc(lib, addArgumentPromotionPass, "LLVMAddArgumentPromotionPass")
+    get_proc(lib, addConstantMergePass, "LLVMAddConstantMergePass")
+    get_proc(lib, addCalledValuePropagationPass, "LLVMAddCalledValuePropagationPass")
+    get_proc(lib, addDeadArgEliminationPass, "LLVMAddDeadArgEliminationPass")
+    get_proc(lib, addFunctionAttrsPass, "LLVMAddFunctionAttrsPass")
+    get_proc(lib, addFunctionInliningPass, "LLVMAddFunctionInliningPass")
+    get_proc(lib, addAlwaysInlinerPass, "LLVMAddAlwaysInlinerPass")
+    get_proc(lib, addGlobalDCEPass, "LLVMAddGlobalDCEPass")
+    get_proc(lib, addGlobalOptimizerPass, "LLVMAddGlobalOptimizerPass")
+    get_proc(lib, addIPConstantPropagationPass, "LLVMAddIPConstantPropagationPass")
+    get_proc(lib, addPruneEHPass, "LLVMAddPruneEHPass")
+    get_proc(lib, addIPSCCPPass, "LLVMAddIPSCCPPass")
+    get_proc(lib, addInternalizePass, "LLVMAddInternalizePass")
+    get_proc(lib, addStripDeadPrototypesPass, "LLVMAddStripDeadPrototypesPass")
+    get_proc(lib, addStripSymbolsPass, "LLVMAddStripSymbolsPass")
+
+    get_proc(lib, addLoopVectorizePass, "LLVMAddLoopVectorizePass")
+    get_proc(lib, addSLPVectorizePass, "LLVMAddSLPVectorizePass")
 
 # ------------------------------------------------------------------------------
 
