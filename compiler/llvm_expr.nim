@@ -144,8 +144,24 @@ proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed:
   else:
     result = value
 
+proc build_object_init(module: BModule; dest: ValueRef; typ: PType) =
+  case analyseObjectWithTypeField(typ):
+  of frNone:
+    discard
+  of frHeader:
+    let obj_value = llvm.buildLoad(module.ll_builder, dest, "object")
+    let m_type = build_mtype_field_ptr(module, obj_value, typ)
+    let type_info = gen_type_info(module, typ)
+    discard llvm.buildStore(module.ll_builder, type_info, m_type)
+  of frEmbedded:
+    let type_info = gen_type_info(module, typ)
+    discard gen_call_runtime_proc(module, "objectInit", @[dest, type_info])
+
 proc build_new_obj(module: BModule; dest: ValueRef; typ: PType) =
   assert_value_type(dest, PointerTypeKind)
+  let ref_type = skipTypes(typ, abstractInstOwned)
+  assert ref_type.kind == tyRef
+  let obj_type = lastSon(ref_type)
   let type_info = gen_type_info(module, typ)
   var args: seq[ValueRef]
   args.add type_info
@@ -154,6 +170,7 @@ proc build_new_obj(module: BModule; dest: ValueRef; typ: PType) =
   let ref_cast_type = get_type(module, typ)
   let ref_cast = llvm.buildBitCast(module.ll_builder, allocated_ptr, ref_cast_type, "ref_cast")
   gen_ref_copy(module, dest, ref_cast)
+  build_object_init(module, dest, obj_type)
   #todo
 
 proc build_new_seq(module: BModule; dest: ValueRef; typ: PType; length: ValueRef) =
@@ -442,6 +459,31 @@ proc gen_magic_ord(module: BModule; node: PNode): ValueRef =
   let ll_type = get_type(module, node.typ)
   result = convert_scalar(module, value, ll_type, is_signed_type(node[1].typ))
 
+proc gen_magic_of(module: BModule; node: PNode): ValueRef =
+  let object_value = gen_expr(module, node[1])
+
+  let subclass_type = skipTypes(node[2].typ, typedescPtrs)
+  var object_type = skipTypes(node[1].typ, abstractInstOwned)
+
+  assert_value_type(object_value, PointerTypeKind)
+  assert subclass_type != nil
+  assert object_type != nil
+
+  let m_type_adr = build_mtype_field_ptr(module, object_value, object_type)
+  let m_type = llvm.buildLoad(module.ll_builder, m_type_adr, "m_type")
+  let object_type_info = gen_type_info(module, object_type)
+  let subclass_type_info = gen_type_info(module, subclass_type)
+
+  result = build_nil_check(module, m_type):
+    if tfFinal in subclass_type.flags:
+      let cmp = llvm.buildICmp(module.ll_builder, IntEQ, m_type, subclass_type_info, "of.typecheck")
+      build_i1_to_i8(module, cmp)
+    else:
+      # todo: cache
+      gen_call_runtime_proc(module, "isObj", @[m_type, subclass_type_info])
+  do:
+    llvm.constInt(module.ll_mem_bool, culonglong 0, Bool 0)
+
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
   proc unary(prc: UnaryProc): ValueRef =
@@ -606,6 +648,7 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mSwap: result = gen_magic_swap(module, node)
   of mOrd: result = gen_magic_ord(module, node)
   of mDotDot: result = gen_call_runtime_proc(module, node)
+  of mOf: result = gen_magic_of(module, node)
   # sets
   of mIncl: gen_incl_set(module, node)
   of mExcl: gen_excl_set(module, node)
@@ -624,6 +667,8 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   # seq
   of mLengthSeq: result = gen_magic_length_seq(module, node)
   of mAppendSeqElem: result = gen_magic_append_seq_elem(module, node)
+  of mNewSeq: result = gen_magic_new_seq(module, node)
+  of mNewSeqOfCap: result = gen_magic_new_seq_of_cap(module, node)
   # strings
   of mLengthStr: result = gen_magic_length_str(module, node)
   of mNewString, mNewStringOfCap, mExit, mParseBiggestFloat:

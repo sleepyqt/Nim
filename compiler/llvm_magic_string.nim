@@ -46,6 +46,11 @@ proc build_nim_seq_len(module: BModule; struct: ValueRef): ValueRef =
 
   assert_value_type(result, IntegerTypeKind)
 
+# Sequences --------------------------------------------------------------------
+
+proc build_new_seq(module: BModule; seq, len: ValueRef; typ: PType) =
+  discard
+
 proc gen_magic_append_seq_elem(module: BModule; node: PNode): ValueRef =
   let sq = gen_expr(module, node[1])
   let sq_type = skipTypes(node[1].typ, {tyVar})
@@ -60,9 +65,23 @@ proc gen_magic_append_seq_elem(module: BModule; node: PNode): ValueRef =
   #debug node
   #assert false
 
+proc gen_magic_new_seq(module: BModule; node: PNode): ValueRef =
+  # todo
+  let seq = gen_expr(module, node[1])
+  let len = gen_expr(module, node[2])
+  build_new_seq(module, seq, len, node[1].typ)
+
+proc gen_magic_new_seq_of_cap(module: BModule; node: PNode): ValueRef =
+  # todo
+  let cap = gen_expr(module, node[1])
+  let type_info = gen_type_info(module, node.typ)
+  result = gen_call_runtime_proc(module, "nimNewSeqOfCap", @[type_info, cap])
+
 proc gen_magic_length_seq(module: BModule; node: PNode): ValueRef =
   let struct = gen_expr(module, node[1])
   result = build_nim_seq_len(module, struct)
+
+# Strings ----------------------------------------------------------------------
 
 proc gen_magic_echo(module: BModule; node: PNode) =
   let brackets = node[1]
@@ -168,6 +187,7 @@ proc gen_magic_chr(module: BModule; node: PNode): ValueRef =
   result = llvm.buildTrunc(module.ll_builder, value, ll_type, "magic.chr")
 
 proc gen_magic_con_str_str(module: BModule; node: PNode): ValueRef =
+  # todo
   debug node
   assert false
 

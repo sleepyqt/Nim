@@ -141,6 +141,22 @@ proc build_field_ptr(module: BModule; struct, index: ValueRef; hint = "struct.in
   var indices = [constant(module, 0i32), index]
   result = llvm.buildGEP(module.ll_builder, struct, addr indices[0], 2, hint)
 
+proc build_mtype_field_ptr(module: BModule; struct: ValueRef; typ: PType): ValueRef =
+  # get pointer to the object "m_type" field
+  assert_value_type(struct, PointerTypeKind)
+  assert typ != nil
+  var indices: seq[ValueRef]
+  indices.add constant(module, int32 0) # remove pointer
+  var typ = skipTypes(typ, abstractInstOwned)
+  while typ.kind in {tyVar, tyLent, tyPtr, tyRef}:
+    typ = skipTypes(typ.lastSon, typedescInst + {tyOwned})
+  while typ.kind == tyObject and typ[0] != nil:
+    typ = skipTypes(typ[0], skipPtrs)
+    indices.add constant(module, int32 0) # super type
+  indices.add constant(module, int32 0) # m_type
+  result = llvm.buildGEP(module.ll_builder, struct, addr indices[0], cuint len indices, "m_type.ptr")
+  assert_value_type(result, PointerTypeKind)
+
 # ------------------------------------------------------------------------------
 
 proc maybe_terminate(module: BModule; target: BasicBlockRef) =
@@ -171,6 +187,49 @@ proc build_open_array(module: BModule; ptr_T: PType; data_ptr: ValueRef; length:
   let field1 = build_field_ptr(module, result, constant(module, 1i32)) # i64*
   discard llvm.buildStore(module.ll_builder, data_ptr, field0) # T* -> T*
   discard llvm.buildStore(module.ll_builder, length, field1) # i64 -> i64
+
+template build_nil_check(module: BModule; value: ValueRef; code_then, code_else: typed): ValueRef =
+  # execute `code_then` if value is not nil
+  assert_value_type(value, PointerTypeKind)
+
+  let entry_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(entry_bb)
+  let then_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.then")
+  let else_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.else")
+  let cont_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.cont")
+  llvm.moveBasicBlockAfter(then_bb, entry_bb)
+  llvm.moveBasicBlockAfter(else_bb, then_bb)
+  llvm.moveBasicBlockAfter(cont_bb, else_bb)
+
+  # entry:
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  let null = llvm.constNull(llvm.typeOf(value))
+  let cond = llvm.buildICmp(module.ll_builder, IntNE, value, null, "")
+  discard llvm.buildCondBr(module.ll_builder, cond, then_bb, else_bb)
+
+  # nilcheck.then:
+  llvm.positionBuilderAtEnd(module.ll_builder, then_bb)
+
+  let value_then = code_then
+
+  let then_inc = llvm.getInsertBlock(module.ll_builder)
+  discard llvm.buildBr(module.ll_builder, cont_bb)
+
+  # nilcheck.else:
+  llvm.positionBuilderAtEnd(module.ll_builder, else_bb)
+
+  let value_else = code_else
+
+  let else_inc = llvm.getInsertBlock(module.ll_builder)
+  discard llvm.buildBr(module.ll_builder, cont_bb)
+
+  # nilcheck.cont
+  llvm.positionBuilderAtEnd(module.ll_builder, cont_bb)
+  let phi = llvm.buildPhi(module.ll_builder, llvm.typeOf(value_then), "nilcheck")
+  var values = [ value_then, value_else ]
+  var blocks = [ then_inc, else_inc ]
+  llvm.addIncoming(phi, addr values[0], addr blocks[0], 2)
+  phi
 
 # ------------------------------------------------------------------------------
 

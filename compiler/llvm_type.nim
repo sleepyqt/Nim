@@ -427,8 +427,14 @@ proc gen_type_info(module: BModule; typ: PType): ValueRef =
       var fsize = 0
       var fkind = 0
       var fflags = 0
-      var fbase = 0
-      var fnode = 0
+      var fbase: ValueRef = llvm.constNull(type_to_ptr nim_type)
+      var fnode: ValueRef = llvm.constNull(type_to_ptr nim_node)
+
+      fsize = int get_type_size(module, typ)
+      fkind = int ord typ.kind
+
+      result = llvm.addGlobal(module.ll_module, nim_type, name)
+      module.add_type_info(sig, result)
 
       case typ.kind:
       of tyEmpty, tyVoid:
@@ -442,10 +448,11 @@ proc gen_type_info(module: BModule; typ: PType): ValueRef =
       of tyProc:
         discard
       of tySequence:
-        discard
+        fbase = gen_type_info(module, lastSon(typ))
+        if not containsGarbageCollectedRef(typ): fflags = fflags or 1
+        if not canFormAcycle(typ): fflags = fflags or 2
       of tyRef:
-        fsize = int get_type_size(module, typ)
-        fkind = int typ.kind
+        fbase = gen_type_info(module, lastSon(typ))
       of tyPtr, tyRange, tyUncheckedArray:
         discard
       of tyArray:
@@ -455,19 +462,28 @@ proc gen_type_info(module: BModule; typ: PType): ValueRef =
       of tyEnum:
         discard
       of tyObject:
-        fsize = int get_type_size(module, typ)
-        fkind = int typ.kind
+        if (tfFinal in typ.flags) and (typ[0] == nil) or (isPureObject(typ)):
+          fkind = int ord tyPureObject
+        if not containsGarbageCollectedRef(typ): fflags = fflags or 1
+        if not canFormAcycle(typ): fflags = fflags or 2
+        if sonsLen(typ) > 0 and lastSon(typ) != nil:
+          var base = skipTypes(lastSon(typ), skipPtrs)
+          assert base != nil
+          fbase = gen_type_info(module, base)
       of tyTuple:
         discard
       else:
         module.ice("gen_type_info: " & $typ.kind)
 
+      assert_value_type(fbase, PointerTypeKind)
+      assert_value_type(fnode, PointerTypeKind)
+
       var fields: seq[ValueRef]
       fields.add constant_int(module, fsize)
       fields.add constant(module, int8 fkind)
       fields.add constant(module, int8 fflags)
-      fields.add llvm.constNull(type_to_ptr nim_type)
-      fields.add llvm.constNull(type_to_ptr nim_node)
+      fields.add fbase
+      fields.add fnode
       fields.add llvm.constNull(module.ll_pointer)
       fields.add llvm.constNull(type_to_ptr marker)
       fields.add llvm.constNull(type_to_ptr deepcopy)
@@ -478,9 +494,6 @@ proc gen_type_info(module: BModule; typ: PType): ValueRef =
         echo "☭☭ initializer      : ", initializer
         echo "☭☭ initializer type : ", llvm.typeOf(initializer)
 
-      result = llvm.addGlobal(module.ll_module, nim_type, name)
-      module.add_type_info(sig, result)
-
       llvm.setInitializer(result, initializer)
       llvm.setGlobalConstant(result, Bool 1)
 
@@ -489,4 +502,5 @@ proc gen_type_info(module: BModule; typ: PType): ValueRef =
         echo "☭☭ result ty        : ", llvm.typeOf(result)
         echo "☭☭ --------------------------------------------------"
 
-
+  assert result != nil
+  assert_value_type(result, PointerTypeKind)
