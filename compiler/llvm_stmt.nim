@@ -415,6 +415,8 @@ proc build_try_longjump(module: BModule; node: PNode) =
   let reraise_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "try.reraise")
   let cont_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "try.cont")
 
+  module.top_scope.unwind_target = else_bb
+
   llvm.moveBasicBlockAfter(then_bb, entry_bb)
   llvm.moveBasicBlockAfter(else_bb, then_bb)
   llvm.moveBasicBlockAfter(finally_bb, else_bb)
@@ -451,6 +453,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
   discard llvm.buildBr(module.ll_builder, finally_bb)
 
   # try.if.else:
+  # generate landing pad
   llvm.positionBuilderAtEnd(module.ll_builder, else_bb)
   discard gen_call_runtime_proc(module, "popSafePoint", @[])
   let exception = gen_call_runtime_proc(module, "getCurrentException", @[]) # Exception*
@@ -461,6 +464,10 @@ proc build_try_longjump(module: BModule; node: PNode) =
 
   assert_value_type(exception, PointerTypeKind)
 
+  # generate code for except branches
+  assert module.top_scope.node == nil
+  module.top_scope.node = node # set if we inside except branch
+
   for branch in node:
     if branch.kind == nkExceptBranch:
       if sonsLen(branch) == 1:
@@ -468,6 +475,12 @@ proc build_try_longjump(module: BModule; node: PNode) =
         discard llvm.buildStore(module.ll_builder, constant_int(module, 0), status_adr)
 
         gen_stmt(module, branch[0])
+
+        # path out return statement inside except brach
+        let terminator = llvm.getBasicBlockTerminator(llvm.getInsertBlock(module.ll_builder))
+        if terminator != nil:
+          assert llvm.getInstructionOpcode(terminator) == Opcode.Br
+          llvm.instructionEraseFromParent(terminator)
 
         discard gen_call_runtime_proc(module, "popCurrentException", @[])
       else:
@@ -481,6 +494,12 @@ proc build_try_longjump(module: BModule; node: PNode) =
         discard llvm.buildStore(module.ll_builder, constant_int(module, 0), status_adr)
 
         let except_code = gen_expr(module, lastSon(branch))
+
+        let terminator = llvm.getBasicBlockTerminator(llvm.getInsertBlock(module.ll_builder))
+
+        if terminator != nil:
+          assert llvm.getInstructionOpcode(terminator) == Opcode.Br
+          llvm.instructionEraseFromParent(terminator)
 
         discard gen_call_runtime_proc(module, "popCurrentException", @[])
         discard llvm.buildBr(module.ll_builder, finally_bb)
@@ -502,12 +521,17 @@ proc build_try_longjump(module: BModule; node: PNode) =
 
   discard llvm.buildBr(module.ll_builder, finally_bb)
 
+  assert module.top_scope.node != nil
+  module.top_scope.node = nil
+
+  # generate code for finally branch
+
   # try.finally
   llvm.positionBuilderAtEnd(module.ll_builder, finally_bb)
 
   for branch in node:
     if branch.kind == nkFinally:
-      let finallbranchy_code = gen_expr(module, branch[0])
+      let finally_branch_code = gen_expr(module, branch[0])
 
   let cond2 = llvm.buildICmp(module.ll_builder,
     IntNE,
@@ -527,8 +551,15 @@ proc build_try_longjump(module: BModule; node: PNode) =
   module.close_scope()
 
 proc build_raise_longjump(module: BModule; node: PNode) =
-  #echo "build_raise_longjump:"
-  # todo: cgen does something weird here
+  let try_scope = module.try_scope()
+
+  if try_scope != nil and try_scope.node != nil:
+    assert try_scope.node.kind in {nkTryStmt, nkHiddenTryStmt}
+    # run cleanups if exception raised inside except brach
+    for branch in try_scope.node:
+      if branch.kind == nkFinally:
+        let finally_branch_code = gen_expr(module, branch[0])
+
   if node[0].kind == nkEmpty:
     discard gen_call_runtime_proc(module, "reraiseException", @[])
   else:
@@ -536,6 +567,7 @@ proc build_raise_longjump(module: BModule; node: PNode) =
     let cast_ty = type_to_ptr get_runtime_type(module, "Exception")
     let exception = gen_expr(module, node[0])
     let cast_exception = llvm.buildBitCast(module.ll_builder, exception, cast_ty, "")
+    assert typ.sym.name.s != ""
     let name = build_cstring_lit(module, typ.sym.name.s)
     discard gen_call_runtime_proc(module, "raiseException", @[cast_exception, name])
 

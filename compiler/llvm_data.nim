@@ -22,6 +22,7 @@ type
     break_name*: int # target for named break (symbol id)
     unwind_target*: BasicBlockRef
     return_target*: BasicBlockRef # target for return statement
+    node*: PNode
 
   EHProcs = object
     personality*: ValueRef

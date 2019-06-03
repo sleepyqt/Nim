@@ -22,7 +22,7 @@ import llvm_dll as llvm
 const spam_var = false
 const spam_types = false
 const spam_proc = false
-const spam_rtti = true
+const spam_rtti = false
 
 # ------------------------------------------------------------------------------
 

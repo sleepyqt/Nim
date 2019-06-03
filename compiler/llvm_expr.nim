@@ -674,6 +674,7 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mNewString, mNewStringOfCap, mExit, mParseBiggestFloat:
     result = gen_call_runtime_proc(module, node)
   of mCopyStr: result = gen_call_runtime_proc(module, node)
+  of mEqCString: result = gen_call_expr(module, node)
   # of mSetLengthStr:
   # of mCopyStr:
   # of mCopyStrLast:
