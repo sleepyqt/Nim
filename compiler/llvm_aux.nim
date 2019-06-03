@@ -335,7 +335,8 @@ proc build_call_memset(module: BModule; dst: ValueRef; val: int8; len: int64) =
 proc build_call_setjmp(module: BModule; buff: ValueRef): ValueRef =
   assert_value_type(buff, PointerTypeKind)
   var args = [ buff ]
-  result = call_intrisic(module, "llvm.eh.sjlj.setjmp", module.ll_setjmp, args)
+  #result = call_intrisic(module, "llvm.eh.sjlj.setjmp", module.ll_setjmp, args)
+  result = call_intrisic(module, "_setjmp", module.ll_setjmp, args)
 
 proc build_call_longjmp(module: BModule; buff: ValueRef) =
   assert_value_type(buff, PointerTypeKind)

@@ -347,7 +347,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
     echo "2"
   except ValueError:
     echo "v"
-  except IOError:
+  except IOError, OSError:
     echo "i"
   finally:
     echo "f"
@@ -364,7 +364,33 @@ proc build_try_longjump(module: BModule; node: PNode) =
     popSafePoint()
     br try.finally
   try.if.else:
-    popSafePoint()
+    popSafePoint()                 #
+    let %e = getCurrentException() #
+    let %t0 = @ValueError          !!
+    let %c0 = isObj(%e, %t0)       !
+    br %c0 try.except0 try.next0   !
+  try.except0:                     !
+    safe_point.status = 0          !
+    echo "v"                       !
+    popCurrentException()          !
+    br try.finally                 !
+  try.next0:                       !
+    let %t1 = @IOError             ++
+    let %c1 = isObj(%e, %t1)       +
+    br %c1 try.except1 try.next0.1 +
+  try.next0.1:                     +
+    let %t1.1 = @OSError           +
+    let %c1.1 = isObj(%em %t1.1)   +
+    br %c1.1 try.except1 try.next1 +
+  try.except1:                     +
+    safe_point.status = 0          +
+    echo "i"                       +
+    popCurrentException()          +
+    br try.finally                 +
+  try.next1:                       ++
+    safe_point.status = 0
+    echo "f"
+    popCurrentException()
     br try.finally
   try.finally:
     echo "f"
@@ -402,11 +428,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
   let context_adr = build_field_ptr(module, safe_point, constant(module, int32 2)) # [N x i64]*
   discard gen_call_runtime_proc(module, "pushSafePoint", @[safe_point])
 
-  echo "S ", llvm.typeOf(status_adr)
-  echo "C ", llvm.typeOf(context_adr)
-
   var indices = [constant_int(module, 0), constant_int(module, 0)]
-  #let first_elem = llvm.buildGEP(module.ll_builder, context_adr, addr indices[0], cuint len indices, "")
   let buff = llvm.buildBitCast(module.ll_builder, context_adr, module.ll_pointer, "try.context")
 
   let status = build_call_setjmp(module, buff)
@@ -431,19 +453,61 @@ proc build_try_longjump(module: BModule; node: PNode) =
   # try.if.else:
   llvm.positionBuilderAtEnd(module.ll_builder, else_bb)
   discard gen_call_runtime_proc(module, "popSafePoint", @[])
+  let exception = gen_call_runtime_proc(module, "getCurrentException", @[]) # Exception*
 
-  for son in node:
-    if son.kind == nkExceptBranch:
-      discard # todo
+  var mtype_indices = [constant(module, int32 0), constant(module, int32 0), constant(module, int32 0)] # e.sup.m_type
+  let exception_mtype_adr = llvm.buildGEP(module.ll_builder, exception, addr mtype_indices[0], cuint len mtype_indices, "")
+  let exception_mtype = llvm.buildLoad(module.ll_builder, exception_mtype_adr, "try.exception.mtype")
+
+  assert_value_type(exception, PointerTypeKind)
+
+  for branch in node:
+    if branch.kind == nkExceptBranch:
+      if sonsLen(branch) == 1:
+        # except branch without condition
+        discard llvm.buildStore(module.ll_builder, constant_int(module, 0), status_adr)
+
+        gen_stmt(module, branch[0])
+
+        discard gen_call_runtime_proc(module, "popCurrentException", @[])
+      else:
+        let incoming_bb = llvm.getInsertBlock(module.ll_builder)
+        let except_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "try.except0")
+        llvm.moveBasicBlockAfter(except_bb, incoming_bb)
+
+        # try.except:
+        llvm.positionBuilderAtEnd(module.ll_builder, except_bb)
+
+        discard llvm.buildStore(module.ll_builder, constant_int(module, 0), status_adr)
+
+        let except_code = gen_expr(module, lastSon(branch))
+
+        discard gen_call_runtime_proc(module, "popCurrentException", @[])
+        discard llvm.buildBr(module.ll_builder, finally_bb)
+
+        # incoming:
+        llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
+
+        for exc_type in branch.sons[0 ..< (sonsLen(branch) - 1)]:
+          let next_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "try.next0")
+          llvm.moveBasicBlockBefore(next_bb, except_bb)
+
+          let type_info = gen_type_info(module, exc_type.typ)
+          let is_obj = gen_call_runtime_proc(module, "isObj", @[exception_mtype, type_info])
+          let cond = build_i8_to_i1(module, is_obj)
+          discard llvm.buildCondBr(module.ll_builder, cond, except_bb, next_bb)
+
+          llvm.positionBuilderAtEnd(module.ll_builder, next_bb)
+
 
   discard llvm.buildBr(module.ll_builder, finally_bb)
 
   # try.finally
   llvm.positionBuilderAtEnd(module.ll_builder, finally_bb)
 
-  for son in node:
-    if son.kind == nkFinally:
-      let finally_code = gen_expr(module, son[0])
+  for branch in node:
+    if branch.kind == nkFinally:
+      let finallbranchy_code = gen_expr(module, branch[0])
 
   let cond2 = llvm.buildICmp(module.ll_builder,
     IntNE,
@@ -463,31 +527,21 @@ proc build_try_longjump(module: BModule; node: PNode) =
   module.close_scope()
 
 proc build_raise_longjump(module: BModule; node: PNode) =
-  echo "build_raise_longjump:"
+  #echo "build_raise_longjump:"
   # todo: cgen does something weird here
   if node[0].kind == nkEmpty:
     discard gen_call_runtime_proc(module, "reraiseException", @[])
   else:
-    let typ = node[0].typ
+    let typ = skipTypes(node[0].typ, abstractPtrs)
     let cast_ty = type_to_ptr get_runtime_type(module, "Exception")
     let exception = gen_expr(module, node[0])
     let cast_exception = llvm.buildBitCast(module.ll_builder, exception, cast_ty, "")
-    echo "exception: ", exception
-    echo "kind: ", typ.kind
-    echo "cast type: ", cast_ty
-    echo "ty: ", llvm.typeOf(exception)
-    # echo "name: ", typ.sym.name.s ! crashes
-    let name = build_cstring_lit(module, "typ.sym.name.s")
-    echo "name: ", name
+    let name = build_cstring_lit(module, typ.sym.name.s)
     discard gen_call_runtime_proc(module, "raiseException", @[cast_exception, name])
 
 # ------------------------------------------------------------------------------
 
 proc gen_try(module: BModule; node: PNode) =
-  echo "> gen try stmt"
-  #debug node
-  #echo "end"
-
   case module.ehmodel:
   of EHModel.LongJump:
     build_try_longjump(module, node)
@@ -496,12 +550,7 @@ proc gen_try(module: BModule; node: PNode) =
   of EHModel.Itanium:
     assert false
 
-  echo "> try end"
-
 proc gen_raise(module: BModule; node: PNode) =
-  echo "gen_raise:"
-  debug node
-  echo "end"
   case module.ehmodel:
   of EHModel.LongJump:
     build_raise_longjump(module, node)
