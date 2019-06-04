@@ -52,7 +52,7 @@ proc build_new_seq(module: BModule; seq, len: ValueRef; typ: PType) =
   discard
 
 proc gen_magic_append_seq_elem(module: BModule; node: PNode): ValueRef =
-  let sq = gen_expr(module, node[1])
+  let sq = gen_expr(module, node[1]).val
   let sq_type = skipTypes(node[1].typ, {tyVar})
   let header = llvm.buildBitCast(module.ll_builder, sq, type_to_ptr get_generic_seq_type(module), "")
   let type_info = gen_type_info(module, sq_type)
@@ -67,18 +67,18 @@ proc gen_magic_append_seq_elem(module: BModule; node: PNode): ValueRef =
 
 proc gen_magic_new_seq(module: BModule; node: PNode): ValueRef =
   # todo
-  let seq = gen_expr(module, node[1])
-  let len = gen_expr(module, node[2])
+  let seq = gen_expr(module, node[1]).val
+  let len = gen_expr(module, node[2]).val
   build_new_seq(module, seq, len, node[1].typ)
 
 proc gen_magic_new_seq_of_cap(module: BModule; node: PNode): ValueRef =
   # todo
-  let cap = gen_expr(module, node[1])
+  let cap = gen_expr(module, node[1]).val
   let type_info = gen_type_info(module, node.typ)
   result = gen_call_runtime_proc(module, "nimNewSeqOfCap", @[type_info, cap])
 
 proc gen_magic_length_seq(module: BModule; node: PNode): ValueRef =
-  let struct = gen_expr(module, node[1])
+  let struct = gen_expr(module, node[1]).val
   result = build_nim_seq_len(module, struct)
 
 # Strings ----------------------------------------------------------------------
@@ -89,7 +89,7 @@ proc gen_magic_echo(module: BModule; node: PNode) =
   if brackets.len == 0:
     discard
   else:
-    let array_ptr = gen_expr(module, brackets) # [1 x %NimStringDesc*]*
+    let array_ptr = gen_expr(module, brackets).val # [1 x %NimStringDesc*]*
     var indices = [constant(module, 0i32), constant(module, 0i32)]
     # get pointer to first element
     let data_ptr = llvm.buildGEP(module.ll_builder, array_ptr, addr indices[0], 2, "") # %NimStringDesc**
@@ -101,16 +101,16 @@ proc gen_magic_length_str(module: BModule; node: PNode): ValueRef =
   case node[1].typ.kind:
   of tyCString:
     var args: seq[ValueRef]
-    args.add gen_expr(module, node[1])
+    args.add gen_expr(module, node[1]).val
     result = gen_call_runtime_proc(module, "nimCStrLen", args)
   of tyString:
-    let str = gen_expr(module, node[1])
+    let str = gen_expr(module, node[1]).val
     result = build_nim_seq_len(module, str)
   else:
     assert false
 
 proc gen_magic_append_str_str(module: BModule; node: PNode): ValueRef =
-  let str = gen_expr(module, node[1])
+  let str = gen_expr(module, node[1]).val
 
   # build `length` expression
 
@@ -118,7 +118,7 @@ proc gen_magic_append_str_str(module: BModule; node: PNode): ValueRef =
   var length_expr: ValueRef = constant_int(module, 0)
   var strings: seq[ValueRef]
   for i in 2 ..< sonsLen(node):
-    strings.add gen_expr(module, node[i])
+    strings.add gen_expr(module, node[i]).val
     if node[i].typ.kind == tyChar:
       inc(length)
     elif node[i].kind in {nkStrLit .. nkTripleStrLit}:
@@ -140,49 +140,49 @@ proc gen_magic_append_str_str(module: BModule; node: PNode): ValueRef =
       discard gen_call_runtime_proc(module, "appendString", @[str, str_add])
 
 proc gen_magic_append_str_ch(module: BModule; node: PNode): ValueRef =
-  let str = gen_expr(module, node[1])
-  let chr = gen_expr(module, node[2])
+  let str = gen_expr(module, node[1]).val
+  let chr = gen_expr(module, node[2]).val
   result = gen_call_runtime_proc(module, "addChar", @[str, chr])
 
-proc gen_string_to_cstring(module: BModule; node: PNode): ValueRef =
-  let str = gen_expr(module, node[0])
-  result = gen_call_runtime_proc(module, "nimToCStringConv", @[str])
+proc gen_string_to_cstring(module: BModule; node: PNode): BValue =
+  let str = gen_expr(module, node[0]).val
+  result.val = gen_call_runtime_proc(module, "nimToCStringConv", @[str])
 
-proc gen_cstring_to_string(module: BModule; node: PNode): ValueRef =
-  let cstr = gen_expr(module, node[1])
-  result = gen_call_runtime_proc(module, "cstrToNimstr", @[cstr])
+proc gen_cstring_to_string(module: BModule; node: PNode): BValue =
+  let cstr = gen_expr(module, node[1]).val
+  result.val = gen_call_runtime_proc(module, "cstrToNimstr", @[cstr])
 
 proc gen_magic_int_to_str(module: BModule; node: PNode): ValueRef =
-  let val = gen_expr(module, node[1])
+  let val = gen_expr(module, node[1]).val
   result = gen_call_runtime_proc(module, "nimIntToStr", @[val])
 
 proc gen_magic_int64_to_str(module: BModule; node: PNode): ValueRef =
-  let val = gen_expr(module, node[1])
+  let val = gen_expr(module, node[1]).val
   result = gen_call_runtime_proc(module, "nimInt64ToStr", @[val])
 
 proc gen_magic_float_to_str(module: BModule; node: PNode): ValueRef =
-  let val = gen_expr(module, node[1])
+  let val = gen_expr(module, node[1]).val
   result = gen_call_runtime_proc(module, "nimFloatToStr", @[val])
 
 proc gen_magic_char_to_str(module: BModule; node: PNode): ValueRef =
-  let val = gen_expr(module, node[1])
+  let val = gen_expr(module, node[1]).val
   result = gen_call_runtime_proc(module, "nimCharToStr", @[val])
 
 proc gen_magic_bool_to_str(module: BModule; node: PNode): ValueRef =
-  let val = gen_expr(module, node[1])
+  let val = gen_expr(module, node[1]).val
   result = gen_call_runtime_proc(module, "nimBoolToStr", @[val])
 
 proc gen_magic_cstr_to_str(module: BModule; node: PNode): ValueRef =
-  let val = gen_expr(module, node[1])
+  let val = gen_expr(module, node[1]).val
   result = gen_call_runtime_proc(module, "cstrToNimstr", @[val])
 
 proc gen_magic_set_length_str(module: BModule; node: PNode): ValueRef =
-  let str = gen_expr(module, node[1])
-  let len = gen_expr(module, node[2])
+  let str = gen_expr(module, node[1]).val
+  let len = gen_expr(module, node[2]).val
   result = gen_call_runtime_proc(module, "setLengthStr", @[str, len])
 
 proc gen_magic_chr(module: BModule; node: PNode): ValueRef =
-  let value = gen_expr(module, node[1])
+  let value = gen_expr(module, node[1]).val
   let ll_type = get_type(module, node.typ)
   result = llvm.buildTrunc(module.ll_builder, value, ll_type, "magic.chr")
 
@@ -192,21 +192,21 @@ proc gen_magic_con_str_str(module: BModule; node: PNode): ValueRef =
   assert false
 
 proc gen_magic_eq_str(module: BModule; node: PNode): ValueRef =
-  let lhs = gen_expr(module, node[1])
-  let rhs = gen_expr(module, node[2])
+  let lhs = gen_expr(module, node[1]).val
+  let rhs = gen_expr(module, node[2]).val
   result = gen_call_runtime_proc(module, "eqStrings", @[lhs, rhs])
 
 proc gen_magic_le_str(module: BModule; node: PNode): ValueRef =
-  let lhs = gen_expr(module, node[1])
-  let rhs = gen_expr(module, node[2])
+  let lhs = gen_expr(module, node[1]).val
+  let rhs = gen_expr(module, node[2]).val
   let cmp = gen_call_runtime_proc(module, "cmpStrings", @[lhs, rhs])
   let zer = constant_int(module, 0)
   result = llvm.buildICmp(module.ll_builder, IntSLE, cmp, zer, "")
   result = build_i1_to_i8(module, result)
 
 proc gen_magic_lt_str(module: BModule; node: PNode): ValueRef =
-  let lhs = gen_expr(module, node[1])
-  let rhs = gen_expr(module, node[2])
+  let lhs = gen_expr(module, node[1]).val
+  let rhs = gen_expr(module, node[2]).val
   let cmp = gen_call_runtime_proc(module, "cmpStrings", @[lhs, rhs])
   let zer = constant_int(module, 0)
   result = llvm.buildICmp(module.ll_builder, IntSLT, cmp, zer, "")

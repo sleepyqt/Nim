@@ -20,10 +20,10 @@ proc gen_incl_set(module: BModule; node: PNode) =
   # "$1 |= ((NU8)1)<<(($2) & 7);$n"
   let set_type = node[1].typ
   let size = get_type_size(module, set_type)
-  let dest = gen_expr_lvalue(module, node[1]) # dest
+  let dest = gen_expr_lvalue(module, node[1]).val # dest
   if size <= 8:
     let ll_type = get_type(module, set_type)
-    let value = gen_expr(module, node[2]) # v
+    let value = gen_expr(module, node[2]).val # v
     let one = llvm.constInt(ll_type, culonglong 1, Bool 0) # 1
     let mask = build_set_mask(module, value, int size) # v and 7
     let bit = llvm.buildShl(module.ll_builder, one, value, "set.incl.bit") # 1 << (v and 7)
@@ -37,10 +37,10 @@ proc gen_excl_set(module: BModule; node: PNode) =
   # "$1 &= ~(((NU8)1) << (($2) & 7));$n"
   let set_type = node[1].typ
   let size = get_type_size(module, set_type)
-  let dest = gen_expr_lvalue(module, node[1]) # dest
+  let dest = gen_expr_lvalue(module, node[1]).val # dest
   if size <= 8:
     let ll_type = get_type(module, set_type)
-    let value = gen_expr(module, node[2]) # v
+    let value = gen_expr(module, node[2]).val # v
     let one = llvm.constInt(ll_type, culonglong 1, Bool 0) # 1
     let mask = build_set_mask(module, value, int size) # v and 7
     let bit = llvm.buildShl(module.ll_builder, one, value, "set.excl.bit") # 1 << (v and 7)
@@ -61,8 +61,8 @@ proc gen_lt_set(module: BModule; node: PNode): ValueRef =
   let set_type = node[1].typ
   let size = get_type_size(module, set_type)
 
-  let lhs = gen_expr(module, node[1])
-  let rhs = gen_expr(module, node[2])
+  let lhs = gen_expr(module, node[1]).val
+  let rhs = gen_expr(module, node[2]).val
 
   if size <= 8:
     let ll_type = get_type(module, set_type)
@@ -81,8 +81,8 @@ proc gen_le_set(module: BModule; node: PNode): ValueRef =
   let set_type = node[1].typ
   let size = get_type_size(module, set_type)
 
-  let lhs = gen_expr(module, node[1])
-  let rhs = gen_expr(module, node[2])
+  let lhs = gen_expr(module, node[1]).val
+  let rhs = gen_expr(module, node[2]).val
 
   if size <= 8:
     let ll_type = get_type(module, set_type)
@@ -99,8 +99,8 @@ proc gen_eq_set(module: BModule; node: PNode): ValueRef =
   let set_type = node[1].typ
   let size = get_type_size(module, set_type)
 
-  let lhs = gen_expr(module, node[1])
-  let rhs = gen_expr(module, node[2])
+  let lhs = gen_expr(module, node[1]).val
+  let rhs = gen_expr(module, node[2]).val
 
   if size <= 8:
     result = llvm.buildICmp(module.ll_builder, IntEq, lhs, rhs, "set.eq")
@@ -113,8 +113,8 @@ proc gen_mul_set(module: BModule; node: PNode): ValueRef =
   let set_type = node[1].typ
   let size = get_type_size(module, set_type)
 
-  let lhs = gen_expr(module, node[1])
-  let rhs = gen_expr(module, node[2])
+  let lhs = gen_expr(module, node[1]).val
+  let rhs = gen_expr(module, node[2]).val
 
   if size <= 8:
     result = llvm.buildAnd(module.ll_builder, lhs, rhs, "set.mul")
@@ -126,8 +126,8 @@ proc gen_plus_set(module: BModule; node: PNode): ValueRef =
   let set_type = node[1].typ
   let size = get_type_size(module, set_type)
 
-  let lhs = gen_expr(module, node[1])
-  let rhs = gen_expr(module, node[2])
+  let lhs = gen_expr(module, node[1]).val
+  let rhs = gen_expr(module, node[2]).val
 
   if size <= 8:
     result = llvm.buildOr(module.ll_builder, lhs, rhs, "set.plus")
@@ -139,8 +139,8 @@ proc gen_minus_set(module: BModule; node: PNode): ValueRef =
   let set_type = node[1].typ
   let size = get_type_size(module, set_type)
 
-  let lhs = gen_expr(module, node[1])
-  let rhs = gen_expr(module, node[2])
+  let lhs = gen_expr(module, node[1]).val
+  let rhs = gen_expr(module, node[2]).val
 
   if size <= 8:
     let inv = llvm.buildNot(module.ll_builder, rhs, "set.not")
@@ -153,8 +153,8 @@ proc gen_sym_diff_set(module: BModule; node: PNode): ValueRef =
   let set_type = node[1].typ
   let size = get_type_size(module, set_type)
 
-  let lhs = gen_expr(module, node[1])
-  let rhs = gen_expr(module, node[2])
+  let lhs = gen_expr(module, node[1]).val
+  let rhs = gen_expr(module, node[2]).val
 
   if size <= 8:
     result = llvm.buildXor(module.ll_builder, lhs, rhs, "set.sym_diff")
@@ -174,8 +174,8 @@ proc gen_magic_in_set(module: BModule; node: PNode): ValueRef =
 
   if set_size <= 8:
     # result = if (set_value and (1 shl value)) != 0
-    let set_value = gen_expr(module, node[1])
-    let value = gen_expr(module, node[2])
+    let set_value = gen_expr(module, node[1]).val
+    let value = gen_expr(module, node[2]).val
     let one = llvm.constInt(ll_val_type, 1, Bool 0)
     let zero = llvm.constInt(ll_val_type, 0, Bool 0)
     let bit = llvm.buildShl(module.ll_builder, one, value, "inset.bit") # 1 shl value

@@ -32,6 +32,9 @@ type
     WindowsSEH
     Itanium
 
+  BValue* = object
+    val*: ValueRef
+
   BModule* = ref object of PPassContext
     abi*: PlatformABI
     ehmodel*: EHModel

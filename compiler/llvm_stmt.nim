@@ -3,9 +3,13 @@
 proc gen_asgn(module: BModule; node: PNode) =
   let lhs = gen_expr_lvalue(module, node[0])
   let rhs = gen_expr(module, node[1])
-  assert lhs != nil, $node[0].kind
-  assert rhs != nil, $node[1].kind
-  gen_copy(module, lhs, rhs, node[0].typ)
+  assert lhs.val != nil, $node[0].kind
+  assert rhs.val != nil, $node[1].kind
+  gen_copy(module, lhs.val, rhs.val, node[0].typ)
+  echo ">>>>> gen assignment <<<<<"
+  echo "location: ", file_info(module, node)
+  echo "LHS: ", lhs, " → ", file_info(module, node[0])
+  echo "RHS: ", rhs, " → ", file_info(module, node[1])
 
 proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
   let target = find_module(module, sym)
@@ -32,7 +36,7 @@ proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef 
     if initializer == nil or initializer.kind == nkEmpty:
       discard
     else:
-      let value = gen_expr(target, initializer)
+      let value = gen_expr(target, initializer).val
       assert value != nil, $initializer.kind
       assert result != nil
       gen_copy(target, result, value, initializer.typ)
@@ -47,7 +51,7 @@ proc build_local_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
   if initializer == nil or initializer.kind == nkEmpty:
     gen_default_init(module, sym.typ, result)
   else:
-    let value = gen_expr(module, initializer)
+    let value = gen_expr(module, initializer).val
     assert value != nil, $initializer.kind
     assert result != nil
     gen_copy(module, result, value, initializer.typ)
@@ -87,10 +91,10 @@ proc gen_tuple_var(module: BModule; node: PNode) =
   for i in 0 .. (length - 3):
     if node[i].kind != nkSym:
       let lowered = lowerTupleUnpacking(module.module_list.graph, node, module.module_sym)
-      discard gen_expr(module, lowered)
+      discard gen_expr(module, lowered).val
       return
 
-  let tuple_var = gen_expr(module, node.lastSon)
+  let tuple_var = gen_expr(module, node.lastSon).val
 
   for i in 0 .. (length - 3):
     let i_node = node[i]
@@ -133,7 +137,7 @@ proc gen_var_section(module: BModule; node: PNode) =
 
 # - Control Flow ---------------------------------------------------------------
 
-proc gen_if(module: BModule; node: PNode): ValueRef =
+proc gen_if(module: BModule; node: PNode): BValue =
   assert(module != nil)
   assert(node != nil)
 
@@ -169,7 +173,7 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
 
   if not isEmptyType(node.typ): # if expr
     let ll_type = get_type(module, node.typ)
-    result = build_entry_alloca(module, ll_type, "if.expr.result")
+    result.val = build_entry_alloca(module, ll_type, "if.expr.result")
 
   let entry_bb = llvm.getInsertBlock(module.ll_builder)
   let fun = llvm.getBasicBlockParent(entry_bb)
@@ -198,7 +202,7 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
       # *** emit cond ***
 
       llvm.positionBuilderAtEnd(module.ll_builder, cond_bb)
-      let cond = build_i8_to_i1(module, gen_expr(module, it[0]))
+      let cond = build_i8_to_i1(module, gen_expr(module, it[0]).val)
 
       if else_bb == nil:
         # else branch missing
@@ -210,8 +214,8 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
 
       # *** emit then branch code ***
 
-      let value = gen_expr(module, it.sons[1])
-      if result != nil: gen_copy(module, result, value, node.typ)
+      let value = gen_expr(module, it.sons[1]).val
+      if result.val != nil: gen_copy(module, result.val, value, node.typ)
 
       # terminate basic block if needed
       maybe_terminate(module, post_bb)
@@ -225,16 +229,16 @@ proc gen_if(module: BModule; node: PNode): ValueRef =
 
       # *** emit else branch code ***
 
-      let value = gen_expr(module, it.sons[0])
-      if result != nil: gen_copy(module, result, value, node.typ)
+      let value = gen_expr(module, it.sons[0]).val
+      if result.val != nil: gen_copy(module, result.val, value, node.typ)
 
       # terminate basic block if needed
       maybe_terminate(module, post_bb)
 
   llvm.positionBuilderAtEnd(module.ll_builder, post_bb)
 
-  if result != nil and node.typ.kind notin {tyObject, tyTuple, tyArray}:
-    result = llvm.buildLoad(module.ll_builder, result, "")
+  if result.val != nil and node.typ.kind notin {tyObject, tyTuple, tyArray}:
+    result.val = llvm.buildLoad(module.ll_builder, result.val, "")
 
 proc gen_while(module: BModule; node: PNode) =
   #[
@@ -268,7 +272,7 @@ proc gen_while(module: BModule; node: PNode) =
 
   llvm.positionBuilderAtEnd(module.ll_builder, cond_bb)
   # emit condition
-  let cond = build_i8_to_i1(module, gen_expr(module, node[0]))
+  let cond = build_i8_to_i1(module, gen_expr(module, node[0]).val)
   discard llvm.buildCondBr(module.ll_builder, cond, loop_bb, exit_bb)
 
   llvm.positionBuilderAtEnd(module.ll_builder, loop_bb)
@@ -305,7 +309,7 @@ proc gen_return(module: BModule; node: PNode) =
 
   discard llvm.buildBr(module.ll_builder, scope.return_target)
 
-proc gen_block(module: BModule; node: PNode): ValueRef =
+proc gen_block(module: BModule; node: PNode): BValue =
   module.open_scope()
 
   let block_name = if node[0].kind != nkEmpty: node[0].sym.name.s else: "block"
@@ -324,7 +328,7 @@ proc gen_block(module: BModule; node: PNode): ValueRef =
     module.top_scope.break_name = node[0].sym.id
 
   llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-  result = gen_expr(module, node[1])
+  result.val = gen_expr(module, node[1]).val
 
   maybe_terminate(module, exit_bb)
 
@@ -332,7 +336,7 @@ proc gen_block(module: BModule; node: PNode): ValueRef =
 
   module.close_scope()
 
-proc gen_stmt_list_expr(module: BModule; node: PNode): ValueRef =
+proc gen_stmt_list_expr(module: BModule; node: PNode): BValue =
   for i in 0 .. node.len - 2:
     gen_stmt(module, node[i])
   result = gen_expr(module, node.lastSon)
@@ -448,7 +452,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
 
   # try.if.then:
   llvm.positionBuilderAtEnd(module.ll_builder, then_bb)
-  let try_code = gen_expr(module, node[0])
+  let try_code = gen_expr(module, node[0]).val
   discard gen_call_runtime_proc(module, "popSafePoint", @[])
   discard llvm.buildBr(module.ll_builder, finally_bb)
 
@@ -493,7 +497,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
 
         discard llvm.buildStore(module.ll_builder, constant_int(module, 0), status_adr)
 
-        let except_code = gen_expr(module, lastSon(branch))
+        let except_code = gen_expr(module, lastSon(branch)).val
 
         let terminator = llvm.getBasicBlockTerminator(llvm.getInsertBlock(module.ll_builder))
 
@@ -531,7 +535,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
 
   for branch in node:
     if branch.kind == nkFinally:
-      let finally_branch_code = gen_expr(module, branch[0])
+      let finally_branch_code = gen_expr(module, branch[0]).val
 
   let cond2 = llvm.buildICmp(module.ll_builder,
     IntNE,
@@ -558,17 +562,17 @@ proc build_raise_longjump(module: BModule; node: PNode) =
     # run cleanups if exception raised inside except brach
     for branch in try_scope.node:
       if branch.kind == nkFinally:
-        let finally_branch_code = gen_expr(module, branch[0])
+        let finally_branch_code = gen_expr(module, branch[0]).val
 
   if node[0].kind == nkEmpty:
     discard gen_call_runtime_proc(module, "reraiseException", @[])
   else:
     let typ = skipTypes(node[0].typ, abstractPtrs)
     let cast_ty = type_to_ptr get_runtime_type(module, "Exception")
-    let exception = gen_expr(module, node[0])
+    let exception = gen_expr(module, node[0]).val
     let cast_exception = llvm.buildBitCast(module.ll_builder, exception, cast_ty, "")
     assert typ.sym.name.s != ""
-    let name = build_cstring_lit(module, typ.sym.name.s)
+    let name = build_cstring_lit(module, typ.sym.name.s).val
     discard gen_call_runtime_proc(module, "raiseException", @[cast_exception, name])
 
 # ------------------------------------------------------------------------------
@@ -640,7 +644,7 @@ proc gen_case_stmt_generic(module: BModule; node: PNode) =
 
   llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
 
-  let lhs = gen_expr(module, node[0])
+  let lhs = gen_expr(module, node[0]).val
 
   var basic_blocks: seq[BasicBlockRef]
 
@@ -649,7 +653,7 @@ proc gen_case_stmt_generic(module: BModule; node: PNode) =
     let branch_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, name)
     llvm.positionBuilderAtEnd(module.ll_builder, branch_bb)
     # generate branch code
-    let val = gen_expr(module, branch.lastSon)
+    let val = gen_expr(module, branch.lastSon).val
     maybe_terminate(module, exit_bb)
     basic_blocks.add(branch_bb)
 
@@ -665,8 +669,8 @@ proc gen_case_stmt_generic(module: BModule; node: PNode) =
         if cond.kind == nkRange:
           # range cond
           # lhs >= range_lo and lhs <= range_hi
-          let range_lo = gen_expr(module, cond[0])
-          let range_hi = gen_expr(module, cond[1])
+          let range_lo = gen_expr(module, cond[0]).val
+          let range_hi = gen_expr(module, cond[1]).val
           let c1 = build_generic_cmp(module, ">=", lhs, range_lo, node[0].typ)
           let c2 = build_generic_cmp(module, "<=", lhs, range_hi, node[0].typ)
           cmp_result = build_i8_to_i1(module, llvm.buildAnd(module.ll_builder, c1, c2, ""))
@@ -674,9 +678,9 @@ proc gen_case_stmt_generic(module: BModule; node: PNode) =
           # scalar cond
           let rhs =
             if cond.kind in {nkIntLit}: # literal may get wrong type...
-              convert_scalar(module, gen_expr(module, cond), llvm.typeOf(lhs), is_signed_type(node[0].typ))
+              convert_scalar(module, gen_expr(module, cond).val, llvm.typeOf(lhs), is_signed_type(node[0].typ))
             else:
-              gen_expr(module, cond)
+              gen_expr(module, cond).val
 
           let cmp = build_generic_cmp(module, "==", lhs, rhs, node[0].typ)
           cmp_result = build_i8_to_i1(module, cmp)

@@ -159,6 +159,13 @@ proc build_object_init(module: BModule; dest: ValueRef; typ: PType) =
 
 proc build_new_obj(module: BModule; dest: ValueRef; typ: PType) =
   assert_value_type(dest, PointerTypeKind)
+
+  echo "build_new_obj:"
+  echo "dest         : ", dest
+  echo "dest ty      : ", llvm.typeOf(dest)
+  echo "dest op      : ", llvm.getInstructionOpcode(dest)
+  echo "dest kind    : ", llvm.getValueKind(dest)
+
   let ref_type = skipTypes(typ, abstractInstOwned)
   assert ref_type.kind == tyRef
   let obj_type = lastSon(ref_type)
@@ -186,27 +193,27 @@ proc build_new_seq(module: BModule; dest: ValueRef; typ: PType; length: ValueRef
 
 # - Literals -------------------------------------------------------------------
 
-proc gen_nil_lit(module: BModule; node: PNode): ValueRef =
+proc gen_nil_lit(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
-  result = llvm.constNull(ll_type)
+  result.val = llvm.constNull(ll_type)
 
-proc gen_int_lit(module: BModule; node: PNode): ValueRef =
+proc gen_int_lit(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
-  result = llvm.constInt(ll_type, culonglong node.intVal, Bool 1)
+  result.val = llvm.constInt(ll_type, culonglong node.intVal, Bool 1)
 
-proc gen_uint_lit(module: BModule; node: PNode): ValueRef =
+proc gen_uint_lit(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
-  result = llvm.constInt(ll_type, culonglong node.intVal, Bool 0)
+  result.val = llvm.constInt(ll_type, culonglong node.intVal, Bool 0)
 
-proc gen_char_lit(module: BModule; node: PNode): ValueRef =
+proc gen_char_lit(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
-  result = llvm.constInt(ll_type, culonglong node.intVal, Bool 0)
+  result.val = llvm.constInt(ll_type, culonglong node.intVal, Bool 0)
 
-proc gen_float_lit(module: BModule; node: PNode): ValueRef =
+proc gen_float_lit(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
-  result = llvm.constReal(ll_type, node.floatVal)
+  result.val = llvm.constReal(ll_type, node.floatVal)
 
-proc gen_object_constr(module: BModule; node: PNode): ValueRef =
+proc gen_object_constr(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
   let alloca = build_entry_alloca(module, ll_type, "object_literal")
 
@@ -219,27 +226,28 @@ proc gen_object_constr(module: BModule; node: PNode): ValueRef =
     build_call_memset(module, adr, 0, size)
     (alloca, node.typ)
 
-  result = dest
+  result.val = dest
+
   for i in 1 ..< node.len:
     let field = node[i]
     let lhs = build_field_access(module, obj_type, dest, field[0].sym)
-    let rhs = gen_expr(module, field[1])
+    let rhs = gen_expr(module, field[1]).val
     gen_copy(module, lhs, rhs, field[0].typ)
 
-proc gen_tuple_constr(module: BModule; node: PNode): ValueRef =
+proc gen_tuple_constr(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
   let alloca = build_entry_alloca(module, ll_type, "tuple.constr")
-  result = alloca
+  result.val = alloca
   for i in 0 ..< node.len:
     let field = node[i]
     let index = constant(module, int32(i))
     let lhs = build_field_ptr(module, alloca, index, "tuple.index")
-    let rhs = gen_expr(module, field)
+    let rhs = gen_expr(module, field).val
     gen_copy(module, lhs, rhs, field.typ)
 
-proc gen_bracket_lvalue(module: BModule; node: PNode): ValueRef =
+proc gen_bracket_lvalue(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
-  result = build_entry_alloca(module, ll_type, "bracket")
+  result.val = build_entry_alloca(module, ll_type, "bracket")
   case node.typ.kind:
   of tyArray:
     # [i64 x N]*
@@ -247,14 +255,14 @@ proc gen_bracket_lvalue(module: BModule; node: PNode): ValueRef =
       let zero = constant_int(module, 0)
       let index = constant_int(module, i)
       var indices = [zero, index]
-      let adr = llvm.buildGEP(module.ll_builder, result, addr indices[0], cuint len indices, "")
-      let val = gen_expr(module, item)
+      let adr = llvm.buildGEP(module.ll_builder, result.val, addr indices[0], cuint len indices, "")
+      let val = gen_expr(module, item).val
       gen_copy(module, adr, val, item.typ)
   of tySequence:
     let length = constant_int(module, int node.sonsLen)
-    build_new_seq(module, result, node.typ, length)
+    build_new_seq(module, result.val, node.typ, length)
     # {{i64, i64}, i8}**
-    let seq = llvm.buildLoad(module.ll_builder, result, "")
+    let seq = llvm.buildLoad(module.ll_builder, result.val, "")
     # {{i64, i64}, i8}*
     let data_ptr = build_field_ptr(module, seq, constant(module, int32 1))
     # i8*
@@ -262,16 +270,16 @@ proc gen_bracket_lvalue(module: BModule; node: PNode): ValueRef =
     for i, item in node.sons:
       var indices = [ constant_int(module, 0), constant_int(module, i) ]
       let adr = llvm.buildGEP(module.ll_builder, data_ptr, addr indices[0], cuint len indices, "")
-      let val = gen_expr(module, item)
+      let val = gen_expr(module, item).val
       gen_copy(module, adr, val, item.typ)
   else: assert false, $node.typ.kind
 
-proc gen_bracket(module: BModule; node: PNode): ValueRef =
-  result = gen_bracket_lvalue(module, node)
+proc gen_bracket(module: BModule; node: PNode): BValue =
+  result.val = gen_bracket_lvalue(module, node).val
   if not live_as_pointer(module, node.typ):
-    result = llvm.buildLoad(module.ll_builder, result, "")
+    result.val = llvm.buildLoad(module.ll_builder, result.val, "")
 
-proc gen_int_set_lit(module: BModule; node: PNode; size: int): ValueRef =
+proc gen_int_set_lit(module: BModule; node: PNode; size: int): BValue =
   let ll_type = get_type(module, node.typ)
   let accum = build_entry_alloca(module, ll_type, "curly.accum")
   gen_default_init(module, node.typ, accum)
@@ -281,7 +289,7 @@ proc gen_int_set_lit(module: BModule; node: PNode; size: int): ValueRef =
       discard
     else:
       # accum = accum or (1 shl value)
-      let value = gen_expr(module, item)
+      let value = gen_expr(module, item).val
       let one = llvm.constInt(ll_type, culonglong 1, Bool 0)
       # todo
       # nim: ../lib/IR/Constants.cpp:1842:
@@ -293,12 +301,12 @@ proc gen_int_set_lit(module: BModule; node: PNode; size: int): ValueRef =
       let merged = llvm.buildOr(module.ll_builder, accum_value, bit, "curly.merged")
       discard llvm.buildStore(module.ll_builder, merged, accum)
 
-  result = llvm.buildLoad(module.ll_builder, accum, "curly.load")
+  result.val = llvm.buildLoad(module.ll_builder, accum, "curly.load")
 
-proc gen_array_set_lit(module: BModule; node: PNode; size: int): ValueRef =
+proc gen_array_set_lit(module: BModule; node: PNode; size: int): BValue =
   assert false
 
-proc gen_set_lit(module: BModule; node: PNode): ValueRef =
+proc gen_set_lit(module: BModule; node: PNode): BValue =
   #echo "gen_set_lit:"
   let size = int get_type_size(module, node.typ)
 
@@ -307,7 +315,7 @@ proc gen_set_lit(module: BModule; node: PNode): ValueRef =
   else:
     result = gen_array_set_lit(module, node, size)
 
-proc build_cstring_lit(module: BModule; text: string): ValueRef =
+proc build_cstring_lit(module: BModule; text: string): BValue =
   let ll_type = llvm.arrayType(module.ll_char, cuint len(text) + 1)
   let initializer = llvm.constStringInContext(module.ll_context, text, cuint len text, Bool 0)
   let global = llvm.addGlobal(module.ll_module, ll_type, "literal.cstring")
@@ -315,9 +323,9 @@ proc build_cstring_lit(module: BModule; text: string): ValueRef =
   llvm.setGlobalConstant(global, Bool 1)
   llvm.setLinkage(global, PrivateLinkage)
   var indices = [constant(module, 0i32), constant(module, 0i32)]
-  result = llvm.buildGEP(module.ll_builder, global, addr indices[0], cuint len indices, "")
+  result.val = llvm.buildGEP(module.ll_builder, global, addr indices[0], cuint len indices, "")
 
-proc gen_str_lit(module: BModule; node: PNode): ValueRef =
+proc gen_str_lit(module: BModule; node: PNode): BValue =
   if node.typ.kind == tyCString:
     result = build_cstring_lit(module, node.strVal)
   elif node.typ.kind == tyString:
@@ -335,7 +343,7 @@ proc gen_str_lit(module: BModule; node: PNode): ValueRef =
     llvm.setGlobalConstant(global, Bool 1)
     llvm.setLinkage(global, PrivateLinkage)
 
-    result = llvm.buildBitCast(module.ll_builder, global, get_nim_string_type(module), "")
+    result.val = llvm.buildBitCast(module.ll_builder, global, get_nim_string_type(module), "")
   else:
     assert false
 
@@ -362,7 +370,7 @@ proc gen_logic_or_and(module: BModule; node: PNode; op: TMagic): ValueRef =
 
   # evaluate lhs first
   llvm.positionBuilderAtEnd(module.ll_builder, incoming_bb)
-  let lhs = build_i8_to_i1(module, gen_expr(module, node[1]))
+  let lhs = build_i8_to_i1(module, gen_expr(module, node[1]).val)
   # reacquire basic block, as new nodes may have inserted
   let lhs_bb = llvm.getInsertBlock(module.ll_builder)
   var expr_result: int
@@ -377,7 +385,7 @@ proc gen_logic_or_and(module: BModule; node: PNode; op: TMagic): ValueRef =
 
   # evaluate rhs
   llvm.positionBuilderAtEnd(module.ll_builder, rhs_bb)
-  let rhs = build_i8_to_i1(module, gen_expr(module, node[2]))
+  let rhs = build_i8_to_i1(module, gen_expr(module, node[2]).val)
   # reacquire rhs basic block
   rhs_bb = llvm.getInsertBlock(module.ll_builder)
   discard llvm.buildBr(module.ll_builder, end_bb)
@@ -391,16 +399,16 @@ proc gen_logic_or_and(module: BModule; node: PNode; op: TMagic): ValueRef =
   result = build_i1_to_i8(module, phi)
 
 proc gen_magic_inc(module: BModule; node: PNode) =
-  let adr = gen_expr_lvalue(module, node[1])
-  let xincrement = gen_expr(module, node[2])
+  let adr = gen_expr_lvalue(module, node[1]).val
+  let xincrement = gen_expr(module, node[2]).val
   let xvalue = llvm.buildLoad(module.ll_builder, adr, "")
   let (value, increment) = fix_literal(module, node, xvalue, xincrement)
   let new_value = llvm.buildAdd(module.ll_builder, value, increment, "inc")
   discard llvm.buildStore(module.ll_builder, new_value, adr)
 
 proc gen_magic_dec(module: BModule; node: PNode) =
-  let adr = gen_expr_lvalue(module, node[1])
-  let xincrement = gen_expr(module, node[2])
+  let adr = gen_expr_lvalue(module, node[1]).val
+  let xincrement = gen_expr(module, node[2]).val
   let xvalue = llvm.buildLoad(module.ll_builder, adr, "")
   let (value, increment) = fix_literal(module, node, xvalue, xincrement)
   let new_value = llvm.buildSub(module.ll_builder, value, increment, "dec")
@@ -412,7 +420,7 @@ proc gen_magic_length(module: BModule; node: PNode): ValueRef =
   #debug sym_node
   case sym_node.typ.kind:
   of tyOpenArray, tyVarargs:
-    let struct = gen_expr_lvalue(module, sym_node)
+    let struct = gen_expr_lvalue(module, sym_node).val
     assert_value_type(struct, PointerTypeKind)
     let len_field = build_field_ptr(module, struct, constant(module, 1i32), "openarray.len")
     assert_value_type(len_field, PointerTypeKind)
@@ -425,15 +433,15 @@ proc gen_magic_eq_proc(module: BModule; node: PNode): ValueRef =
   if node[1].typ.callConv == ccClosure:
     assert false
   else:
-    let lhs = gen_expr(module, node[1])
-    let rhs = gen_expr(module, node[2])
+    let lhs = gen_expr(module, node[1]).val
+    let rhs = gen_expr(module, node[2]).val
     assert lhs != nil, $node[1].kind
     assert rhs != nil, $node[2].kind
     result = llvm.buildICmp(module.ll_builder, IntEQ, lhs, rhs, "eq.proc")
 
 proc gen_magic_swap(module: BModule; node: PNode): ValueRef =
-  let lhs = gen_expr_lvalue(module, node[1])
-  let rhs = gen_expr_lvalue(module, node[2])
+  let lhs = gen_expr_lvalue(module, node[1]).val
+  let rhs = gen_expr_lvalue(module, node[2]).val
   let ll_type = get_type(module, node[1].typ)
   let tmp = build_entry_alloca(module, ll_type, "swap.tmp")
   gen_copy_lvalue(module, tmp, lhs, node[1].typ)
@@ -441,26 +449,26 @@ proc gen_magic_swap(module: BModule; node: PNode): ValueRef =
   gen_copy_lvalue(module, rhs, tmp, node[1].typ)
 
 proc gen_magic_new(module: BModule; node: PNode): ValueRef =
-  result = gen_expr_lvalue(module, node[1])
+  result = gen_expr_lvalue(module, node[1]).val
   build_new_obj(module, result, node[1].typ)
 
 proc gen_magic_is_nil(module: BModule; node: PNode): ValueRef =
-  let lhs = gen_expr(module, node[1])
+  let lhs = gen_expr(module, node[1]).val
   let rhs = llvm.constNull(llvm.typeOf(lhs))
   result = llvm.buildICmp(module.ll_builder, IntEQ, lhs, rhs, "")
   result = build_i1_to_i8(module, result)
 
 proc gen_magic_to_float(module: BModule; node: PNode): ValueRef =
-  let value = gen_expr(module, node[1])
+  let value = gen_expr(module, node[1]).val
   result = llvm.buildSIToFP(module.ll_builder, value, get_type(module, node.typ), "m.to.float")
 
 proc gen_magic_ord(module: BModule; node: PNode): ValueRef =
-  let value = gen_expr(module, node[1])
+  let value = gen_expr(module, node[1]).val
   let ll_type = get_type(module, node.typ)
   result = convert_scalar(module, value, ll_type, is_signed_type(node[1].typ))
 
 proc gen_magic_of(module: BModule; node: PNode): ValueRef =
-  let object_value = gen_expr(module, node[1])
+  let object_value = gen_expr(module, node[1]).val
 
   let subclass_type = skipTypes(node[2].typ, typedescPtrs)
   var object_type = skipTypes(node[1].typ, abstractInstOwned)
@@ -487,32 +495,32 @@ proc gen_magic_of(module: BModule; node: PNode): ValueRef =
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
   proc unary(prc: UnaryProc): ValueRef =
-    let lhs = gen_expr(module, node[1])
+    let lhs = gen_expr(module, node[1]).val
     assert lhs != nil
     result = prc(module.ll_builder, lhs, "")
 
   proc binary(prc: BinaryProc): ValueRef =
-    let xlhs = gen_expr(module, node[1])
-    let xrhs = gen_expr(module, node[2])
+    let xlhs = gen_expr(module, node[1]).val
+    let xrhs = gen_expr(module, node[2]).val
     let (lhs, rhs) = fix_literal(module, node, xlhs, xrhs)
     result = prc(module.ll_builder, lhs, rhs, "")
 
   proc cmp_int(pred: IntPredicate): ValueRef =
-    let xlhs = gen_expr(module, node[1])
-    let xrhs = gen_expr(module, node[2])
+    let xlhs = gen_expr(module, node[1]).val
+    let xrhs = gen_expr(module, node[2]).val
     let (lhs, rhs) = fix_literal(module, node, xlhs, xrhs)
     result = llvm.buildICmp(module.ll_builder, pred, lhs, rhs, "")
     result = build_i1_to_i8(module, result)
 
   proc unary_minus(): ValueRef =
     # -value
-    let value = gen_expr(module, node[1])
+    let value = gen_expr(module, node[1]).val
     result = llvm.buildNeg(module.ll_builder, value, "unary_minus")
 
   proc abs_int(): ValueRef =
     # if x >= 0 x else: -x
     let pred = if is_signed_type(node[1].typ): llvm.IntSGE else: llvm.IntUGe
-    let value = gen_expr(module, node[1])
+    let value = gen_expr(module, node[1]).val
     let zero = llvm.constInt(llvm.typeOf(value), 0, Bool 1)
     let neg_value = llvm.buildNeg(module.ll_builder, value, "abs.neg_value")
     let cond = llvm.buildICmp(module.ll_builder, pred, value, zero, "abs.cmp")
@@ -521,29 +529,29 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   proc min_int(): ValueRef =
     # if x <= y: x else: y
     let pred = if is_signed_type(node[1].typ): llvm.IntSLE else: llvm.IntULE
-    let x = gen_expr(module, node[1])
-    let y = gen_expr(module, node[2])
+    let x = gen_expr(module, node[1]).val
+    let y = gen_expr(module, node[2]).val
     let cond = llvm.buildICmp(module.ll_builder, pred, x, y, "min.cond")
     result = llvm.buildSelect(module.ll_builder, cond, x, y, "min.result")
 
   proc max_int(): ValueRef =
     # if x >= y: x else: y
     let pred = if is_signed_type(node[1].typ): llvm.IntSGE else: llvm.IntUGE
-    let x = gen_expr(module, node[1])
-    let y = gen_expr(module, node[2])
+    let x = gen_expr(module, node[1]).val
+    let y = gen_expr(module, node[2]).val
     let cond = llvm.buildICmp(module.ll_builder, pred, x, y, "max.cond")
     result = llvm.buildSelect(module.ll_builder, cond, x, y, "max.result")
 
   proc float_binary(prc: BinaryProc): ValueRef =
-    let lhs = gen_expr(module, node[1])
-    let rhs = gen_expr(module, node[2])
+    let lhs = gen_expr(module, node[1]).val
+    let rhs = gen_expr(module, node[2]).val
     assert lhs != nil
     assert rhs != nil
     result = prc(module.ll_builder, lhs, rhs, "")
 
   proc abs_float(): ValueRef =
     # if x >= 0 x else: -x
-    let value = gen_expr(module, node[1])
+    let value = gen_expr(module, node[1]).val
     let zero = llvm.constReal(llvm.typeOf(value), 0)
     let neg_value = llvm.buildFNeg(module.ll_builder, value, "abs.neg_value")
     let cond = llvm.buildFCmp(module.ll_builder, RealOGE, value, zero, "abs.cmp")
@@ -551,21 +559,21 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
 
   proc min_float(): ValueRef =
     # if x <= y: x else: y
-    let x = gen_expr(module, node[1])
-    let y = gen_expr(module, node[2])
+    let x = gen_expr(module, node[1]).val
+    let y = gen_expr(module, node[2]).val
     let cond = llvm.buildFCmp(module.ll_builder, llvm.RealOLE, x, y, "")
     result = llvm.buildSelect(module.ll_builder, cond, x, y, "")
 
   proc max_float(): ValueRef =
     # if x >= y: x else: y
-    let x = gen_expr(module, node[1])
-    let y = gen_expr(module, node[2])
+    let x = gen_expr(module, node[1]).val
+    let y = gen_expr(module, node[2]).val
     let cond = llvm.buildFCmp(module.ll_builder, llvm.RealOGE, x, y, "")
     result = llvm.buildSelect(module.ll_builder, cond, x, y, "")
 
   proc cmp_float(pred: RealPredicate): ValueRef =
-    let lhs = gen_expr(module, node[1])
-    let rhs = gen_expr(module, node[2])
+    let lhs = gen_expr(module, node[1]).val
+    let rhs = gen_expr(module, node[2]).val
     result = llvm.buildFCmp(module.ll_builder, pred, lhs, rhs, "")
     result = build_i1_to_i8(module, result)
 
@@ -580,7 +588,7 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mDivI: result = binary(llvm.buildSDiv)
   of mModI: result = binary(llvm.buildSRem)
   of mUnaryMinusI, mUnaryMinusI64: result = unary_minus()
-  of mUnaryPlusI: result = gen_expr(module, node[1])
+  of mUnaryPlusI: result = gen_expr(module, node[1]).val
   # unsigned int
   of mAddU: result = binary(llvm.buildAdd)
   of mSubU: result = binary(llvm.buildSub)
@@ -699,164 +707,164 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
   of mToFloat: result = gen_magic_to_float(module, node)
   else: echo "unknown magic: ", op
 
-proc gen_obj_down_conv(module: BModule; node: PNode): ValueRef =
+proc gen_obj_down_conv(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
-  let value = gen_expr(module, node[0])
+  let value = gen_expr(module, node[0]).val
   let conv_type = if node.typ.kind == tyObject: type_to_ptr ll_type else: ll_type
   assert llvm.getTypeKind(conv_type) == PointerTypeKind
   assert_value_type(value, PointerTypeKind)
-  result = llvm.buildBitCast(module.ll_builder, value, conv_type, "obj.down")
+  result.val = llvm.buildBitCast(module.ll_builder, value, conv_type, "obj.down")
 
-proc gen_obj_up_conv(module: BModule; node: PNode): ValueRef =
+proc gen_obj_up_conv(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
-  let value = gen_expr(module, node[0])
+  let value = gen_expr(module, node[0]).val
   assert llvm.getTypeKind(ll_type) == PointerTypeKind
   assert_value_type(value, PointerTypeKind)
-  result = llvm.buildBitCast(module.ll_builder, value, ll_type, "obj.up")
+  result.val = llvm.buildBitCast(module.ll_builder, value, ll_type, "obj.up")
 
 # ------------------------------------------------------------------------------
 
-proc gen_call(module: BModule; node: PNode): ValueRef =
+proc gen_call(module: BModule; node: PNode): BValue =
   if node[0].kind == nkSym and node[0].sym.magic != mNone:
-    result = gen_magic_expr(module, node, node[0].sym.magic)
+    result.val = gen_magic_expr(module, node, node[0].sym.magic)
   else:
-    result = gen_call_expr(module, node)
+    result.val = gen_call_expr(module, node)
 
 # ------------------------------------------------------------------------------
 
-proc gen_sym_const(module: BModule; sym: PSym): ValueRef =
-  result = module.get_value(sym)
-  if result == nil:
+proc gen_sym_const(module: BModule; sym: PSym): BValue =
+  result.val = module.get_value(sym)
+  if result.val == nil:
     case sym.typ.kind:
     of tyArray:
       let elem_type = get_type(module, elemType(sym.typ))
       let elem_count = cuint lengthOrd(module.module_list.config, sym.typ)
       var items: seq[ValueRef]
       for item in sym.ast:
-        items.add gen_expr(module, item)
+        items.add gen_expr(module, item).val
       let data = llvm.constArray(elem_type, addr items[0], cuint elem_count)
-      result = llvm.addGlobal(module.ll_module, llvm.typeOf(data), "constant")
-      llvm.setGlobalConstant(result, Bool 1)
-      llvm.setInitializer(result, data)
-      module.add_value(sym, result)
+      result.val = llvm.addGlobal(module.ll_module, llvm.typeOf(data), "constant")
+      llvm.setGlobalConstant(result.val, Bool 1)
+      llvm.setInitializer(result.val, data)
+      module.add_value(sym, result.val)
     of tyInt: # produced by {.intdefine.}
       let ll_type = get_type(module, sym.typ)
-      result = constInt(ll_type, culonglong sym.ast.intVal, Bool is_signed_type(sym.typ))
+      result.val = constInt(ll_type, culonglong sym.ast.intVal, Bool is_signed_type(sym.typ))
     else:
       assert false, $sym.typ.kind
 
-  assert result != nil, (block: (debug(sym); "nil"))
+  assert result.val != nil, (block: (debug(sym); "nil"))
 
-proc gen_sym_expr_lvalue(module: BModule; node: PNode): ValueRef =
+proc gen_sym_expr_lvalue(module: BModule; node: PNode): BValue =
   #echo "gen_sym_expr_lvalue kind: ", node.sym.kind
 
   case node.sym.kind:
   of skVar, skForVar, skLet, skResult, skTemp:
     if {sfGlobal, sfThread} * node.sym.flags != {}:
-      result = gen_var_prototype(module, node)
+      result.val = gen_var_prototype(module, node)
     else:
-      result = module.get_value(node.sym)
+      result.val = module.get_value(node.sym)
   of skParam:
-    result = module.get_value(node.sym)
+    result.val = module.get_value(node.sym)
   of skConst:
-    result = gen_sym_const(module, node.sym)
+    result.val = gen_sym_const(module, node.sym).val
   else:
     assert false, $node.sym.kind
 
-  assert result != nil
-  assert_value_type(result, PointerTypeKind)
+  assert result.val != nil
+  assert_value_type(result.val, PointerTypeKind)
 
-proc gen_sym_expr(module: BModule; node: PNode): ValueRef =
+proc gen_sym_expr(module: BModule; node: PNode): BValue =
   #echo "gen_sym_expr kind: ", node.kind, " sym.kind: ", node.sym.kind
 
   case node.sym.kind:
   of skProc, skConverter, skIterator, skFunc:
     if sfCompileTime in node.sym.flags: module.ice("attempt to generate code for compile time proc")
-    result = gen_proc(module, node.sym)
+    result.val = gen_proc(module, node.sym)
   of skConst:
     result = gen_sym_const(module, node.sym)
   of skVar, skForVar, skResult, skLet, skParam, skTemp:
-    let alloca = gen_sym_expr_lvalue(module, node)
+    let alloca = gen_sym_expr_lvalue(module, node).val
     if live_as_pointer(module, node.sym.typ):
-      result = alloca
+      result.val = alloca
     else:
-      result = llvm.buildLoad(module.ll_builder, alloca, "var." & node.sym.name.s)
+      result.val = llvm.buildLoad(module.ll_builder, alloca, "var." & node.sym.name.s)
   of skType:
-    result = gen_type_info(module, node.sym.typ)
+    result.val = gen_type_info(module, node.sym.typ)
   else:
     assert false, $node.sym.kind
 
-  assert result != nil
+  assert result.val != nil
 
 # ------------------------------------------------------------------------------
 
-proc gen_dot_expr_lvalue(module: BModule; node: PNode): ValueRef =
-  let lhs = gen_expr_lvalue(module, node[0])
+proc gen_dot_expr_lvalue(module: BModule; node: PNode): BValue =
+  let lhs = gen_expr_lvalue(module, node[0]).val
 
   let field = node[1].sym
   let object_type = node[0].typ
 
   if node[0].typ.kind == tyObject:
-    result = build_field_access(module, object_type, lhs, field)
+    result.val = build_field_access(module, object_type, lhs, field)
   elif node[0].typ.kind == tyTuple:
     for index, tuple_field in node[0].typ.n.sons:
       if tuple_field.kind == nkSym:
         if tuple_field.sym.id == field.id:
           let ll_index = constant(module, int32 index)
-          result = build_field_ptr(module, lhs, ll_index, "tuple.field")
+          result.val = build_field_ptr(module, lhs, ll_index, "tuple.field")
           break
   else:
     assert false, $(node[0].typ.kind)
 
-  assert result != nil
+  assert result.val != nil
 
-proc gen_dot_expr(module: BModule; node: PNode): ValueRef =
-  let adr = gen_dot_expr_lvalue(module, node)
+proc gen_dot_expr(module: BModule; node: PNode): BValue =
+  let adr = gen_dot_expr_lvalue(module, node).val
   assert_value_type(adr, PointerTypeKind)
 
   if live_as_pointer(module, node[1].typ):
-    result = adr
+    result.val = adr
   else:
-    result = llvm.buildLoad(module.ll_builder, adr, "gen_dot_expr.deref")
+    result.val = llvm.buildLoad(module.ll_builder, adr, "gen_dot_expr.deref")
 
-  assert result != nil
+  assert result.val != nil
 
-proc gen_checked_field_lvalue(module: BModule; node: PNode): ValueRef =
+proc gen_checked_field_lvalue(module: BModule; node: PNode): BValue =
   # todo: field checks
   result = gen_dot_expr_lvalue(module, node[0])
 
-  assert result != nil
+  #assert result != nil
 
-proc gen_checked_field_expr(module: BModule; node: PNode): ValueRef =
-  let adr = gen_checked_field_lvalue(module, node)
-  result = llvm.buildLoad(module.ll_builder, adr, "gen_checked_field_expr.deref")
+proc gen_checked_field_expr(module: BModule; node: PNode): BValue =
+  let adr = gen_checked_field_lvalue(module, node).val
+  result.val = llvm.buildLoad(module.ll_builder, adr, "gen_checked_field_expr.deref")
 
-  assert result != nil
+  assert result.val != nil
 
 # ------------------------------------------------------------------------------
 
-proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
-  let lhs = gen_expr_lvalue(module, node[0])
-  let rhs = gen_expr(module, node[1])
+proc gen_bracket_expr_lvalue(module: BModule; node: PNode): BValue =
+  let lhs = gen_expr_lvalue(module, node[0]).val
+  let rhs = gen_expr(module, node[1]).val
   assert lhs != nil
   assert rhs != nil
   case node[0].typ.kind:
   of tyArray:
     var indices = [constant_int(module, 0), rhs]
-    result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "array.index")
+    result.val = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "array.index")
   of tyUncheckedArray:
     var indices = [constant_int(module, 0), rhs]
-    result = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "uncheckedarray.index")
+    result.val = llvm.buildGEP(module.ll_builder, lhs, addr indices[0], cuint len indices, "uncheckedarray.index")
   of tyOpenArray, tyVarargs:
     let adr_field_data = build_field_ptr(module, lhs, constant(module, 0i32), "openarray.data")
     let adr_field_lengt = build_field_ptr(module, lhs, constant(module, 1i32), "openarray.length")
     let data_ptr = llvm.buildLoad(module.ll_builder, adr_field_data, "openarray.deref")
     var indices = [rhs]
-    result = llvm.buildGEP(module.ll_builder, data_ptr, addr indices[0], cuint len indices, "openarray.index")
+    result.val = llvm.buildGEP(module.ll_builder, data_ptr, addr indices[0], cuint len indices, "openarray.index")
   of tyCString:
     let adr = llvm.buildLoad(module.ll_builder, lhs, "cstring.deref")
     var indices = [rhs]
-    result = llvm.buildGEP(module.ll_builder, adr, addr indices[0], cuint len indices, "cstring.index")
+    result.val = llvm.buildGEP(module.ll_builder, adr, addr indices[0], cuint len indices, "cstring.index")
   of tyString:
     # {{i64, i64}, [i8 x 0]}**
     let struct = llvm.buildLoad(module.ll_builder, lhs, "")
@@ -864,54 +872,54 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): ValueRef =
     let data = build_field_ptr(module, struct, constant(module, int32 1), "string.data.ptr")
     # [i8 x 0]*
     var indices = [constant_int(module, 0), rhs]
-    result = llvm.buildGEP(module.ll_builder, data, addr indices[0], cuint len indices, "string.[]")
+    result.val = llvm.buildGEP(module.ll_builder, data, addr indices[0], cuint len indices, "string.[]")
     # i8*
   of tySequence:
     let struct = llvm.buildLoad(module.ll_builder, lhs, "")
     let data = build_field_ptr(module, struct, constant(module, int32 1), "seq.data.ptr")
     var indices = [constant_int(module, 0), rhs]
-    result = llvm.buildGEP(module.ll_builder, data, addr indices[0], cuint len indices, "seq.[]")
+    result.val = llvm.buildGEP(module.ll_builder, data, addr indices[0], cuint len indices, "seq.[]")
   of tyTuple:
     # {i64, i64, i64}**
     let struct = llvm.buildLoad(module.ll_builder, lhs, "")
     # {i64, i64, i64}*
-    result = build_field_ptr(module, struct, rhs, "tuple.[]")
+    result.val = build_field_ptr(module, struct, rhs, "tuple.[]")
   else:
     assert false
 
-proc gen_bracket_expr(module: BModule; node: PNode): ValueRef =
-  let adr = gen_bracket_expr_lvalue(module, node)
-  result = llvm.buildLoad(module.ll_builder, adr, "gen_bracket_expr.deref")
+proc gen_bracket_expr(module: BModule; node: PNode): BValue =
+  let adr = gen_bracket_expr_lvalue(module, node).val
+  result.val = llvm.buildLoad(module.ll_builder, adr, "gen_bracket_expr.deref")
 
 # ------------------------------------------------------------------------------
 
-proc gen_deref_expr_lvalue(module: BModule; node: PNode): ValueRef =
+proc gen_deref_expr_lvalue(module: BModule; node: PNode): BValue =
   # **value -> *value
-  let adr = gen_expr_lvalue(module, node[0])
-  result = llvm.buildLoad(module.ll_builder, adr, "deref.lvalue")
+  let adr = gen_expr_lvalue(module, node[0]).val
+  result.val = llvm.buildLoad(module.ll_builder, adr, "deref.lvalue")
 
-proc gen_deref_expr(module: BModule; node: PNode): ValueRef =
+proc gen_deref_expr(module: BModule; node: PNode): BValue =
   # *value -> value
   #debug node
   #debug node.typ
   #debug node[0].typ
-  let adr = gen_expr(module, node[0])
+  let adr = gen_expr(module, node[0]).val
   if node[0].typ.kind == tyVar and live_as_pointer(module, node.typ) and node.kind == nkHiddenDeref:
     # proc p1(p: Foo)
     # proc p2(p: var Foo) = p1(p)
     #                          p[] # ← ignore hidden deref here
-    result = adr
+    result.val = adr
   else:
-    result = llvm.buildLoad(module.ll_builder, adr, "deref.rvalue")
+    result.val = llvm.buildLoad(module.ll_builder, adr, "deref.rvalue")
 
-proc gen_addr(module: BModule; node: PNode): ValueRef =
+proc gen_addr(module: BModule; node: PNode): BValue =
   # addr foo
-  result = gen_expr_lvalue(module, node[0])
+  result.val = gen_expr_lvalue(module, node[0]).val
 
-proc gen_conv(module: BModule; node: PNode): ValueRef =
+proc gen_conv(module: BModule; node: PNode): BValue =
   let dst_type = skipTypes(node.typ, {tyRange})
   let src_type = skipTypes(node[1].typ, {tyRange})
-  let value = gen_expr(module, node[1])
+  let value = gen_expr(module, node[1]).val
   let ll_src_type = llvm.typeOf(value)
   let ll_dst_type = get_type(module, dst_type)
   #echo "gen_conv:"
@@ -925,63 +933,64 @@ proc gen_conv(module: BModule; node: PNode): ValueRef =
   const Pointers   = {tyPtr, tyPointer, tyCString, tyRef}
 
   if ll_src_type == ll_dst_type:
-    result = value
+    result.val = value
 
   elif (src_type.kind in Integers) and (dst_type.kind in Integers):
     # int -> int
-    result = convert_scalar(module, value, ll_dst_type, true)
+    result.val = convert_scalar(module, value, ll_dst_type, true)
 
   elif (src_type.kind in Unsigned) and (dst_type.kind in Unsigned):
     # uint -> uint
-    result = convert_scalar(module, value, ll_dst_type, false)
+    result.val = convert_scalar(module, value, ll_dst_type, false)
 
   elif (src_type.kind in {tyFloat32}) and (dst_type.kind in {tyFloat, tyFloat64}):
     # ext float
-    result = llvm.buildFPExt(module.ll_builder, value, module.ll_float64, "")
+    result.val = llvm.buildFPExt(module.ll_builder, value, module.ll_float64, "")
 
   elif (src_type.kind in {tyFloat64, tyFloat}) and (dst_type.kind in {tyFloat32}):
     # trunc float
-    result = llvm.buildFPTrunc(module.ll_builder, value, module.ll_float32, "")
+    result.val = llvm.buildFPTrunc(module.ll_builder, value, module.ll_float32, "")
 
   elif (src_type.kind in Floats) and (dst_type.kind in Integers):
     # float -> int
-    result = llvm.buildFPToSI(module.ll_builder, value, ll_dst_type, "")
+    result.val = llvm.buildFPToSI(module.ll_builder, value, ll_dst_type, "")
 
   elif (src_type.kind in Floats) and (dst_type.kind in Unsigned):
     # float -> uint
-    result = llvm.buildFPToUI(module.ll_builder, value, ll_dst_type, "")
+    result.val = llvm.buildFPToUI(module.ll_builder, value, ll_dst_type, "")
 
   elif (src_type.kind in Integers) and (dst_type.kind in Floats):
     # int -> float
-    result = llvm.buildSIToFP(module.ll_builder, value, ll_dst_type, "")
+    result.val = llvm.buildSIToFP(module.ll_builder, value, ll_dst_type, "")
 
   elif (src_type.kind in Unsigned) and (dst_type.kind in Floats):
     # uint -> float
-    result = llvm.buildUIToFP(module.ll_builder, value, ll_dst_type, "")
+    result.val = llvm.buildUIToFP(module.ll_builder, value, ll_dst_type, "")
 
   elif (src_type.kind in Pointers) and (dst_type.kind in Pointers):
     # pointer -> pointer
-    result = llvm.buildBitCast(module.ll_builder, value, ll_dst_type, "")
+    result.val = llvm.buildBitCast(module.ll_builder, value, ll_dst_type, "")
 
   else:
     echo "unsupported conv ", src_type.kind, " =====> ", dst_type.kind
 
-proc gen_check_range_float(module: BModule; node: PNode): ValueRef =
+proc gen_check_range_float(module: BModule; node: PNode): BValue =
   # todo
   discard
 
-proc gen_check_range(module: BModule; node: PNode): ValueRef =
-  # int6(v1)
-  # node(node[0])
+proc gen_check_range(module: BModule; node: PNode): BValue =
   # todo: range check
-  let value = gen_expr(module, node[0])
+  let value = gen_expr(module, node[0]).val
   let dst_type = get_type(module, node.typ)
   let signed = is_signed_type(node[0].typ)
-  result = convert_scalar(module, value, dst_type, signed)
+  result.val = convert_scalar(module, value, dst_type, signed)
 
-proc gen_check_range64(module: BModule; node: PNode): ValueRef =
+proc gen_check_range64(module: BModule; node: PNode): BValue =
   # todo
-  result = gen_check_range(module, node)
+  let value = gen_expr(module, node[0]).val
+  let dst_type = get_type(module, node.typ)
+  let signed = is_signed_type(node[0].typ)
+  result.val = convert_scalar(module, value, dst_type, signed)
 
 proc build_cast(module: BModule; value: ValueRef; ll_dst_type: TypeRef): ValueRef =
   let ll_src_type = llvm.typeOf(value)
@@ -1004,19 +1013,19 @@ proc build_cast(module: BModule; value: ValueRef; ll_dst_type: TypeRef): ValueRe
     echo "dst_kind < ", dst_kind, " >"
     assert false
 
-proc gen_cast_expr_lvalue(module: BModule; node: PNode): ValueRef =
-  let value = gen_expr_lvalue(module, node[1])
+proc gen_cast_expr_lvalue(module: BModule; node: PNode): BValue =
+  let value = gen_expr_lvalue(module, node[1]).val
   let dst_type = type_to_ptr get_type(module, node[0].typ)
-  result = build_cast(module, value, dst_type)
+  result.val = build_cast(module, value, dst_type)
 
-proc gen_cast_expr(module: BModule; node: PNode): ValueRef =
-  let value = gen_expr(module, node[1])
+proc gen_cast_expr(module: BModule; node: PNode): BValue =
+  let value = gen_expr(module, node[1]).val
   let dst_type = get_type(module, node[0].typ)
-  result = build_cast(module, value, dst_type)
+  result.val = build_cast(module, value, dst_type)
 
 # ------------------------------------------------------------------------------
 
-proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
+proc gen_expr_lvalue(module: BModule; node: PNode): BValue =
   # L value, always pointer
   #echo "gen_expr_lvalue kind: ", node.kind, " ", file_info(module, node)
   case node.kind:
@@ -1036,9 +1045,9 @@ proc gen_expr_lvalue(module: BModule; node: PNode): ValueRef =
     result = gen_bracket_lvalue(module, node)
   else: echo "gen_expr_lvalue: unknown node kind: ", node.kind
 
-  assert_value_type(result, PointerTypeKind)
+  assert_value_type(result.val, PointerTypeKind)
 
-proc gen_expr(module: BModule; node: PNode): ValueRef =
+proc gen_expr(module: BModule; node: PNode): BValue =
   # R value, can be pointer or value
   #echo "gen_expr kind: ", node.kind, " ", file_info(module, node)
   case node.kind:

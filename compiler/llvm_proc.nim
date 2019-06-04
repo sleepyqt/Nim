@@ -401,7 +401,7 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
 
 proc gen_call_expr(module: BModule; node: PNode): ValueRef =
   let cc = node[0].typ.callConv
-  let callee = gen_expr(module, node[0])
+  let callee = gen_expr(module, node[0]).val
 
   when spam_proc:
     if node[0].kind == nkSym:
@@ -414,7 +414,7 @@ proc gen_call_expr(module: BModule; node: PNode): ValueRef =
   var arguments_types: seq[PType]
 
   for arg in node.sons[1 .. ^1]:
-    let value = gen_expr(module, arg)
+    let value = gen_expr(module, arg).val
     assert value != nil, (block: (debug(arg); "nil"))
     arguments.add(value)
     arguments_types.add(arg.typ)
