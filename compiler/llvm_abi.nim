@@ -216,9 +216,31 @@ method classify_argument_type(abi: Amd64AbiWindows; module: BModule; typ: PType)
   of tyInt .. tyInt64, tyUint .. tyUInt64, tyFloat32, tyFloat64, tyFloat:
     result.class = ArgClass.Direct
 
-  of tyPtr, tyPointer, tyVar, tyCString:
+  of tyCString, tyPtr, tyPointer, tyVar, tyRef, tyString, tySequence:
     result.class = ArgClass.Direct
 
+  of tyOpenArray, tyVarargs:
+    result.class = OpenArray
+
+  of tyEnum:
+    result.class = Direct
+
+  of tyChar:
+    result.class = Direct
+
+  of tyProc:
+    result.class = Direct
+
+  of tyRange:
+    result.class = Direct
+
+  of tySet:
+    let size = get_type_size(module, typ)
+    case size:
+    of 1, 2, 4, 8:
+      result.class = Direct
+    else:
+      result.class = Indirect
   else:
     module.ice("classify_argument_type: " & $typ.kind)
 
@@ -234,9 +256,28 @@ method classify_return_type(abi: Amd64AbiWindows; module: BModule; typ: PType): 
   of tyInt .. tyInt64, tyUint .. tyUInt64, tyFloat32, tyFloat64, tyFloat:
     result.class = ArgClass.Direct
 
-  of tyPtr, tyPointer, tyVar, tyCString:
+  of tyCString, tyPtr, tyPointer, tyVar, tyRef, tyString, tySequence:
     result.class = ArgClass.Direct
 
+  of tyEnum:
+    result.class = Direct
+
+  of tyChar:
+    result.class = Direct
+
+  of tyProc:
+    result.class = Direct
+
+  of tyRange:
+    result.class = Direct
+
+  of tySet:
+    let size = get_type_size(module, typ)
+    case size:
+    of 1, 2, 4, 8:
+      result.class = Direct
+    else:
+      result.class = Indirect
   else:
     module.ice("classify_return_type: " & $typ.kind)
 
@@ -276,11 +317,17 @@ method classify_argument_type(abi: X86Abi; module: BModule; typ: PType): ArgInfo
   of tyFloat32, tyFloat64, tyFloat:
     result.class = ArgClass.Direct
 
-  of tyPtr, tyPointer, tyVar, tyCString, tyRef, tyString:
+  of tyCString, tyPtr, tyPointer, tyVar, tyRef, tyString, tySequence:
     result.class = ArgClass.Direct
 
   of tyOpenArray, tyVarargs:
     result.class = OpenArray
+
+  of tyEnum:
+    result.class = ArgClass.Direct
+
+  of tyChar:
+    result.class = ArgClass.Direct
 
   of tyBool:
     result.class = Direct
@@ -300,6 +347,8 @@ method classify_argument_type(abi: X86Abi; module: BModule; typ: PType): ArgInfo
     else:
       result.class = Indirect
 
+  of tyTypeDesc:
+    result.class = Ignore
   else:
     module.ice("classify_argument_type: " & $typ.kind)
 
@@ -315,7 +364,13 @@ method classify_return_type(abi: X86Abi; module: BModule; typ: PType): ArgInfo =
   of tyInt .. tyInt64, tyUint .. tyUInt64, tyFloat32, tyFloat64, tyFloat:
     result.class = ArgClass.Direct
 
-  of tyCString, tyPtr, tyPointer, tyVar, tyRef, tyString:
+  of tyCString, tyPtr, tyPointer, tyVar, tyRef, tyString, tySequence:
+    result.class = Direct
+
+  of tyEnum:
+    result.class = Direct
+
+  of tyChar:
     result.class = Direct
 
   of tyBool:
@@ -328,6 +383,13 @@ method classify_return_type(abi: X86Abi; module: BModule; typ: PType): ArgInfo =
   of tyRange:
     result.class = Direct
 
+  of tySet:
+    let size = get_type_size(module, typ)
+    case size:
+    of 1, 2, 4, 8:
+      result.class = Direct
+    else:
+      result.class = Indirect
   else:
     module.ice("classify_return_type: " & $typ.kind)
 
