@@ -44,7 +44,8 @@ type
     module_list*: BModuleList
     file_name*: AbsoluteFile
     full_file_name*: AbsoluteFile
-    init_proc*: ValueRef # the `main` module procedure
+    init_proc*: ValueRef # proc where module top level code goes
+    main_proc*: ValueRef # only for `main` module, initializes other modules
     sig_collisions*: CountTable[SigHash]
     ehprocs*: EHProcs
     delayed_procs*: seq[PSym]
@@ -84,6 +85,7 @@ type
     graph*: ModuleGraph
     config*: ConfigRef
     sig_collisions*: CountTable[SigHash]
+    main_module*: BModule
 
 # ------------------------------------------------------------------------------
 

@@ -131,17 +131,26 @@ proc setup_codegen(module: BModule) =
     llvm.setModuleDataLayout(module.ll_module, layout)
 
 proc setup_init_proc(module: BModule) =
-  module.init_proc = llvm.addFunction(
-    module.ll_module,
-    module.module_sym.name.s & "_module_main",
-    llvm.functionType(module.ll_void, nil, 0, Bool 0))
+  let fun_ty = llvm.functionType(module.ll_void, nil, 0, Bool 0)
+  let init_name = module.module_sym.name.s & "_module_init"
+  let main_name = module.module_sym.name.s & "_module_main"
+
+  if sfMainModule in module.module_sym.flags:
+    module.main_proc = llvm.addFunction(module.ll_module, main_name, fun_ty)
+    add_function_attr(module, module.main_proc, module.ll_noinline)
+    add_function_attr(module, module.main_proc, module.ll_uwtable)
+    llvm.setFunctionCallConv(module.main_proc, cuint map_call_conv(module, ccDefault))
+    assert module.module_list.main_module == nil
+    module.module_list.main_module = module
+
+  module.init_proc = llvm.addFunction(module.ll_module, init_name, fun_ty)
 
   add_function_attr(module, module.init_proc, module.ll_noinline)
   add_function_attr(module, module.init_proc, module.ll_uwtable)
   llvm.setFunctionCallConv(module.init_proc, cuint map_call_conv(module, ccDefault))
 
   # module entry point
-  let entry_bb = llvm.appendBasicBlockInContext(module.ll_context, module.init_proc, "module_entry")
+  let entry_bb = llvm.appendBasicBlockInContext(module.ll_context, module.init_proc, "entry")
   llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
   module.top_scope = BScope(proc_val: module.init_proc, parent: nil)
 
@@ -313,7 +322,7 @@ proc gen_main_module*(module: BModule) =
     let main_proc = get_main_proc(module)
     let entry_bb = llvm.appendBasicBlockInContext(module.ll_context, main_proc, "app_entry")
     llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-    let call = llvm.buildCall(module.ll_builder, module.init_proc, nil, 0, "")
+    let call = llvm.buildCall(module.ll_builder, module.main_proc, nil, 0, "")
     llvm.setInstructionCallConv(call, llvm.getFunctionCallConv(main_proc))
     discard llvm.buildRet(module.ll_builder, llvm.constInt(module.ll_int32, culonglong 0, Bool 0))
 
@@ -384,59 +393,103 @@ proc gen_delayed(module: BModule; module_list: BModuleList): int =
     assert module.delayed_procs.len == 0
 
 proc llWriteModules*(backend: RootRef, config: ConfigRef) =
+  let module_list = BModuleList(backend)
+  var errors = false
 
-  when true:
-    let module_list = BModuleList(backend)
+  # - - - all modules are already closed here - - -
 
+  # - - - generate code for dealyed procedures - - -
 
+  for module in module_list.closed_modules:
+    while gen_delayed(module, module_list) != 0: discard
+
+  # - - - generate module initialization code - - -
+
+  let main_proc = module_list.main_module.main_proc
+  let ll_context = module_list.main_module.ll_context
+  let ll_builder = module_list.main_module.ll_builder
+  let ll_module = module_list.main_module.ll_module
+  # generate code inside main module!
+  let entry_bb = llvm.appendBasicBlockInContext(ll_context, main_proc, "entry")
+  llvm.positionBuilderAtEnd(ll_builder, entry_bb)
+
+  for module in module_list.closed_modules:
+    var init_proc: ValueRef
+    if sfMainModule in module.module_sym.flags:
+      init_proc = module.init_proc
+    else:
+      let fun_ty = llvm.functionType(module_list.main_module.ll_void, nil, 0, Bool 0)
+      let init_name = module.module_sym.name.s & "_module_init"
+      init_proc = llvm.addFunction(ll_module, init_name, fun_ty)
+      llvm.setFunctionCallConv(init_proc, cuint map_call_conv(module, ccDefault))
+
+    assert main_proc != nil
+    assert init_proc != nil
+
+    let call = llvm.buildCall(ll_builder, init_proc, nil, 0, "")
+    llvm.setInstructionCallConv(call, llvm.getFunctionCallConv(init_proc))
+  # end for
+  discard llvm.buildRetVoid(ll_builder)
+
+  # - - - run verification pass - - -
+
+  for module in module_list.closed_modules:
+    let new_errors = run_verify_pass(module)
+    errors = errors or new_errors
+
+  # - - - run optimization passes - - -
+
+  if not errors and optOptimizeSpeed in config.options:
     for module in module_list.closed_modules:
-      # Repeat, as delayed proc may trigger generation of new delayed procs in other modules
-      while gen_delayed(module, module_list) != 0: discard
+      run_opt_speed_pass(module)
 
+  # - - - verify modules again - - -
+
+  for module in module_list.closed_modules:
+    let new_errors = run_verify_pass(module)
+    errors = errors or new_errors
+
+  # - - - write module to .ll file - - -
+
+  if true:
+    for module in module_list.closed_modules:
       let config = module.module_list.config
       let base_file_name = completeGeneratedFilePath(config, withPackageName(config, module.file_name))
       let ll_file = changeFileExt(base_file_name, ".ll")
-      let bc_file = changeFileExt(base_file_name, ".bc")
-      let o_file = changeFileExt(base_file_name, ".o")
-
-      var errors = run_verify_pass(module)
-
-      if optOptimizeSpeed in config.options:
-        run_opt_speed_pass(module)
-
-      errors = run_verify_pass(module)
-
-      when false:
-        echo "writing module :: ", ll_file, " × ", bc_file, " x ", o_file
-        let m = printModuleToString(module.ll_module)
-        echo m
-        disposeMessage(m)
-        echo "---------------------------------------------------"
-
-      let cf = CFile(obj: o_file)
-      addFileToCompile(config, cf)
 
       when true:
         var err0: cstring
         var res0 = llvm.printModuleToFile(module.ll_module, cstring ll_file, addr err0)
         llvm.disposeMessage(err0)
 
-      when false:
-        var res1 = llvm.writeBitcodeToFile(module.ll_module, cstring bc_file)
+  # - - - generate object files - - -
 
-      if errors:
-        module.ice("broken bitcode in module " & $module.module_sym.name.s)
+  for module in module_list.closed_modules:
+    let config = module.module_list.config
+    let base_file_name = completeGeneratedFilePath(config, withPackageName(config, module.file_name))
+    let o_file = changeFileExt(base_file_name, ".o")
 
-      when true:
-        var err1: cstring
-        var fmt = llvm.ObjectFile
-        var res2 = llvm.targetMachineEmitToFile(
-          t = module.ll_machine,
-          m = module.ll_module,
-          filename = cstring o_file,
-          codegen = fmt,
-          errorMessage = addr err1)
-        llvm.disposeMessage(err1)
+    #let bc_file = changeFileExt(base_file_name, ".bc")
+
+    let cf = CFile(obj: o_file)
+    addFileToCompile(config, cf)
+
+    if errors:
+      module.ice("broken bitcode")
+
+    when false:
+      var res1 = llvm.writeBitcodeToFile(module.ll_module, cstring bc_file)
+
+    when true:
+      var err1: cstring
+      var fmt = llvm.ObjectFile
+      var res2 = llvm.targetMachineEmitToFile(
+        t = module.ll_machine,
+        m = module.ll_module,
+        filename = cstring o_file,
+        codegen = fmt,
+        errorMessage = addr err1)
+      llvm.disposeMessage(err1)
 
 
 const llPass* = makePass(myOpen, myProcess, myClose)
