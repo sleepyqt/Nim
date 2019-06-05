@@ -124,8 +124,10 @@ proc raiseEOF() {.noinline, noreturn.} =
 proc strerror(errnum: cint): cstring {.importc, header: "<string.h>".}
 
 when not defined(NimScript):
-  var
-    errno {.importc, header: "<errno.h>".}: cint ## error variable
+  when defined(LLVM):
+    var errno {.importc, threadvar.}: cint ## error variable
+  else:
+    var errno {.importc, header: "<errno.h>".}: cint ## error variable
 
 proc checkErr(f: File) =
   when not defined(NimScript):

@@ -172,6 +172,13 @@ type
     AMDGPUKERNELCallConv = 91, X86RegCallCallConv = 92, AMDGPUHSCallConv = 93,
     MSP430BUILTINCallConv = 94, AMDGPULSCallConv = 95, AMDGPUESCallConv = 96
 
+  ThreadLocalMode* = enum
+    NotThreadLocal = 0,
+    GeneralDynamicTLSModel,
+    LocalDynamicTLSModel, # For variables that are only used within the current shared library.
+    InitialExecTLSModel, # For variables in modules that will not be loaded dynamically.
+    LocalExecTLSModel # For variables defined in the executable and only used within it.
+
 type
   BinaryProc* = proc (b: BuilderRef; l, r: ValueRef; n: cstring): ValueRef {.dll.}
   UnaryProc* = proc(b: BuilderRef; v: ValueRef; name: cstring): ValueRef {.dll.}
@@ -500,6 +507,11 @@ var addLoopVectorizePass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddLoopVectori
 var addSLPVectorizePass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddSLPVectorizePass
 
 var getInitializer*: proc(globalVar: ValueRef): ValueRef {.dll.} # LLVMGetInitializer
+
+var isThreadLocal*: proc(globalVar: ValueRef): Bool {.dll.}
+var setThreadLocal*: proc(globalVar: ValueRef; isThreadLocal: Bool) {.dll.}
+var getThreadLocalMode*: proc(globalVar: ValueRef): ThreadLocalMode {.dll.}
+var setThreadLocalMode*: proc(globalVar: ValueRef; mode: ThreadLocalMode) {.dll.}
 
 # ------------------------------------------------------------------------------
 
@@ -842,6 +854,11 @@ proc ll_load_dll*: bool =
     get_proc(lib, addSLPVectorizePass, "LLVMAddSLPVectorizePass")
 
     get_proc(lib, getInitializer, "LLVMGetInitializer")
+
+    get_proc(lib, isThreadLocal, "LLVMIsThreadLocal")
+    get_proc(lib, setThreadLocal, "LLVMSetThreadLocal")
+    get_proc(lib, getThreadLocalMode, "LLVMGetThreadLocalMode")
+    get_proc(lib, setThreadLocalMode, "LLVMSetThreadLocalMode")
 
 # ------------------------------------------------------------------------------
 

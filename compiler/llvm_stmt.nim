@@ -36,6 +36,9 @@ proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef 
     llvm.setInitializer(result, llvm.constNull(ll_type))
     llvm.setVisibility(result, DefaultVisibility)
 
+    if sfThread in sym.flags:
+      llvm.setThreadLocal(result, Bool 1)
+
     if initializer == nil or initializer.kind == nkEmpty:
       discard
     else:
@@ -70,6 +73,9 @@ proc gen_var_prototype(module: BModule; node: PNode): BValue =
     result.val = llvm.addGlobal(module.ll_module, ll_type, name)
     module.add_value(sym, result.val)
     llvm.setLinkage(result.val, ExternalLinkage)
+
+    if sfThread in sym.flags:
+      llvm.setThreadLocal(result.val, Bool 1)
 
     when spam_var:
       echo "%% --------------------------------------------------"
