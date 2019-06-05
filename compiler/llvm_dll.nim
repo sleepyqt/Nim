@@ -499,6 +499,8 @@ var addStripSymbolsPass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddStripSymbols
 var addLoopVectorizePass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddLoopVectorizePass
 var addSLPVectorizePass*: proc(pm: PassManagerRef) {.dll.} # LLVMAddSLPVectorizePass
 
+var getInitializer*: proc(globalVar: ValueRef): ValueRef {.dll.} # LLVMGetInitializer
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -838,6 +840,8 @@ proc ll_load_dll*: bool =
 
     get_proc(lib, addLoopVectorizePass, "LLVMAddLoopVectorizePass")
     get_proc(lib, addSLPVectorizePass, "LLVMAddSLPVectorizePass")
+
+    get_proc(lib, getInitializer, "LLVMGetInitializer")
 
 # ------------------------------------------------------------------------------
 

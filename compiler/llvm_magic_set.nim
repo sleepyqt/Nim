@@ -166,6 +166,9 @@ proc gen_magic_in_set(module: BModule; node: PNode): ValueRef =
   let set_size = get_type_size(module, set_type)
   let val_type = node[2].typ
   let ll_val_type = get_type(module, val_type)
+  let ll_set_type = get_type(module, set_type)
+
+  # `val` in `set`
 
   assert node[1] != nil
   assert node[2] != nil
@@ -177,9 +180,10 @@ proc gen_magic_in_set(module: BModule; node: PNode): ValueRef =
     let set_value = gen_expr(module, node[1]).val
     let value = gen_expr(module, node[2]).val
     let one = llvm.constInt(ll_val_type, 1, Bool 0)
-    let zero = llvm.constInt(ll_val_type, 0, Bool 0)
+    let zero = llvm.constInt(ll_set_type, 0, Bool 0)
     let bit = llvm.buildShl(module.ll_builder, one, value, "inset.bit") # 1 shl value
-    let merged = llvm.buildAnd(module.ll_builder, set_value, bit, "inset.merged") # set_value and (1 shl value)
+    let bit_ok = convert_scalar(module, bit, ll_set_type, false)
+    let merged = llvm.buildAnd(module.ll_builder, set_value, bit_ok, "inset.merged") # set_value and (1 shl value)
     let r_bool =  llvm.buildICmp(module.ll_builder, IntNE, merged, zero, "inset.r_bool")
     result = build_i1_to_i8(module, r_bool)
   else:

@@ -5,18 +5,20 @@ proc gen_asgn(module: BModule; node: PNode) =
   let rhs = gen_expr(module, node[1])
   assert lhs.val != nil, $node[0].kind
   assert rhs.val != nil, $node[1].kind
-  gen_copy(module, lhs.val, rhs.val, node[0].typ)
-  echo ">>>>> gen assignment <<<<<"
-  echo "location: ", file_info(module, node)
-  echo "LHS: ", lhs, " → ", file_info(module, node[0])
-  echo "RHS: ", rhs, " → ", file_info(module, node[1])
+  let typ = skipTypes(node[0].typ, abstractRange + tyUserTypeClasses + {tyStatic})
+
+  build_assign(module, lhs, rhs, typ)
 
 proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
   let target = find_module(module, sym)
   result = target.get_value(sym)
-  if result == nil:
-    let ll_type = get_type(target, sym.typ)
+
+  let ll_type = get_type(target, sym.typ)
+
+  if result == nil: # else we already have variable declared somehow...
     let name = mangle_global_var_name(target, sym)
+    result = llvm.addGlobal(target.ll_module, ll_type, name)
+    target.add_value(sym, result)
 
     when spam_var:
       echo "☺☺ --------------------------------------------------"
@@ -27,9 +29,10 @@ proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef 
       echo "☺☺ loc flags        : ", sym.loc.flags
       echo "☺☺ --------------------------------------------------"
 
-    result = llvm.addGlobal(target.ll_module, ll_type, name)
-    target.add_value(sym, result)
-
+  if result != nil and llvm.getInitializer(result) == nil:
+    # Its possible to use global before declaring it.
+    # The 'use' will generate prototype, so check if
+    # the var is prototype and 'upgrade' it to real variable.
     llvm.setInitializer(result, llvm.constNull(ll_type))
     llvm.setVisibility(result, DefaultVisibility)
 
@@ -40,6 +43,7 @@ proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef 
       assert value != nil, $initializer.kind
       assert result != nil
       gen_copy(target, result, value, initializer.typ)
+
 
 proc build_local_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
   let ll_type = get_type(module, sym.typ)
@@ -56,15 +60,16 @@ proc build_local_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
     assert result != nil
     gen_copy(module, result, value, initializer.typ)
 
-proc gen_var_prototype(module: BModule; node: PNode): ValueRef =
+proc gen_var_prototype(module: BModule; node: PNode): BValue =
   let sym = node.sym
-  result = module.get_value(sym)
-  if (result == nil):
+  result.val = module.get_value(sym)
+  if (result.val == nil):
+
     let ll_type = get_type(module, node.sym.typ)
     let name = mangle_global_var_name(module, sym)
-    result = llvm.addGlobal(module.ll_module, ll_type, name)
-    module.add_value(sym, result)
-    llvm.setLinkage(result, ExternalLinkage)
+    result.val = llvm.addGlobal(module.ll_module, ll_type, name)
+    module.add_value(sym, result.val)
+    llvm.setLinkage(result.val, ExternalLinkage)
 
     when spam_var:
       echo "%% --------------------------------------------------"
@@ -77,7 +82,8 @@ proc gen_var_prototype(module: BModule; node: PNode): ValueRef =
       echo "%% module id        : ", module.module_sym.id
       echo "%% --------------------------------------------------"
 
-  assert result != nil
+  assert result.val != nil
+  result.storage = OnHeap
 
 proc gen_closure_var(module: BModule; node: PNode) =
   debug node
@@ -691,6 +697,8 @@ proc gen_case_stmt_generic(module: BModule; node: PNode) =
         llvm.positionBuilderAtEnd(module.ll_builder, save_bb)
         discard llvm.buildCondBr(module.ll_builder, cmp_result, branch_bb, cond_bb)
         llvm.positionBuilderAtEnd(module.ll_builder, cond_bb)
+        if branch == node.sons[^1]:
+          discard llvm.buildBr(module.ll_builder, exit_bb)
     else:
       maybe_terminate(module, branch_bb)
 

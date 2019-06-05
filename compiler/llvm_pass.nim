@@ -40,6 +40,7 @@ proc gen_expr_lvalue(module: BModule; node: PNode): BValue
 proc gen_copy(module: BModule; dst, val: ValueRef; typ: PType)
 proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef)
 proc build_cstring_lit(module: BModule; text: string): BValue
+proc build_assign(module: BModule; dst, src: BValue; typ: PType; copy: bool = false)
 proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed: bool): ValueRef
 
 # ------------------------------------------------------------------------------
@@ -372,20 +373,26 @@ proc run_opt_speed_pass(module: BModule) =
   llvm.addLoopRotatePass(pm)
   discard llvm.runPassManager(pm, module.ll_module)
 
+proc gen_delayed(module: BModule; module_list: BModuleList): int =
+  for module in module_list.closed_modules:
+    while module.delayed_procs.len > 0:
+      let delayed_proc = module.delayed_procs.pop
+      assert delayed_proc != nil
+      gen_proc_body(module, delayed_proc)
+      inc(result)
+
+    assert module.delayed_procs.len == 0
+
 proc llWriteModules*(backend: RootRef, config: ConfigRef) =
 
   when true:
-    let mod_list = BModuleList(backend)
+    let module_list = BModuleList(backend)
 
-    for module in mod_list.closed_modules:
-      while module.delayed_procs.len > 0:
-        let delayed_proc = module.delayed_procs.pop
-        assert delayed_proc != nil
-        gen_proc_body(module, delayed_proc)
 
-      assert module.delayed_procs.len == 0
+    for module in module_list.closed_modules:
+      # Repeat, as delayed proc may trigger generation of new delayed procs in other modules
+      while gen_delayed(module, module_list) != 0: discard
 
-    for module in mod_list.closed_modules:
       let config = module.module_list.config
       let base_file_name = completeGeneratedFilePath(config, withPackageName(config, module.file_name))
       let ll_file = changeFileExt(base_file_name, ".ll")

@@ -34,6 +34,7 @@ type
 
   BValue* = object
     val*: ValueRef
+    storage*: TStorageLoc
 
   BModule* = ref object of PPassContext
     abi*: PlatformABI

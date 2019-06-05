@@ -17,6 +17,7 @@ proc gen_proc_prototype(module: BModule; sym: PSym): ValueRef =
       echo "♥♥ flags            : ", sym.flags
       echo "♥♥ loc flags        : ", sym.loc.flags
       echo "♥♥ mangled name     : ", proc_name
+      echo "♥♥ module           : ", module.module_sym.name.s, " id ", module.module_sym.id
       echo "♥♥ --------------------------------------------------"
 
 proc gen_proc_body(module: BModule; sym: PSym) =
@@ -29,12 +30,13 @@ proc gen_proc_body(module: BModule; sym: PSym) =
 
     when spam_proc:
       echo "** --------------------------------------------------"
-      echo "** generate proc    : ", sym.name.s
-      echo "** id               : ", sym.id
-      echo "** flags            : ", sym.flags
-      echo "** loc kind         : ", sym.loc.k
-      echo "** loc flags        : ", sym.loc.flags
-      echo "** call conv        : ", sym.typ.callConv
+      echo "** generate proc     : ", sym.name.s
+      echo "** id                : ", sym.id
+      echo "** flags             : ", sym.flags
+      echo "** loc kind          : ", sym.loc.k
+      echo "** loc flags         : ", sym.loc.flags
+      echo "** call conv         : ", sym.typ.callConv
+      echo "** module            : ", module.module_sym.name.s, " id ", module.module_sym.id
       echo "** --------------------------------------------------"
 
     # save current bb for nested procs
@@ -239,8 +241,14 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
     result = gen_proc_prototype(module, sym)
   else:
     let target = find_module(module, sym)
-    discard gen_proc_prototype(target, sym)
-    gen_proc_body(target, sym)
+
+    # delay code generation for builtin compiler procs
+    if sfCompilerProc in sym.flags:
+      discard gen_proc_prototype(target, sym)
+      target.delayed_procs.add(sym)
+    else:
+      discard gen_proc_prototype(target, sym)
+      gen_proc_body(target, sym)
 
     result = gen_proc_prototype(module, sym)
 
@@ -406,8 +414,8 @@ proc gen_call_expr(module: BModule; node: PNode): ValueRef =
   when spam_proc:
     if node[0].kind == nkSym:
       echo "++ --------------------------------------------------"
-      echo "++ gen_call_expr    : ", node[0].sym.name.s, " ", node.kind
-      echo "++ call conv        : ", cc
+      echo "++ gen_call_expr     : ", node[0].sym.name.s, " ", node.kind
+      echo "++ call conv         : ", cc
       echo "++ --------------------------------------------------"
 
   var arguments: seq[ValueRef]

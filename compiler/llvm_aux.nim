@@ -295,6 +295,7 @@ proc build_field_access(module: BModule; object_type: PType; object_value: Value
       object_value
 
   var indices = [ constant(module, 0i32), constant(module, path[0].index.int32) ]
+  assert_value_type(object_adr, PointerTypeKind)
   result = llvm.buildGEP(module.ll_builder, object_adr, addr indices[0], cuint len indices, "")
 
   for i in 1 .. path.high:
