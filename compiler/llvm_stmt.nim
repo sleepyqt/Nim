@@ -305,6 +305,14 @@ proc gen_break(module: BModule; node: PNode) =
   assert(break_target != nil)
   discard llvm.buildBr(module.ll_builder, break_target)
 
+  let entry_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(entry_bb)
+
+  # code may appear after break statement!
+  let dead_code = llvm.appendBasicBlockInContext(module.ll_context, fun, "break.dead_code")
+  llvm.moveBasicBlockAfter(dead_code, entry_bb)
+  llvm.positionBuilderAtEnd(module.ll_builder, dead_code)
+
 proc gen_return(module: BModule; node: PNode) =
   let scope = module.proc_scope()
 
