@@ -67,7 +67,7 @@ proc gen_copy_lvalue(module: BModule; dst, adr: ValueRef; typ: PType) =
   of tyInt .. tyInt64, tyUint .. tyUint64,
      tyFloat, tyFloat32, tyFloat64,
      tyPtr, tyPointer, tyCString,
-     tyBool, tyChar, tyEnum, tyRange:
+     tyBool, tyChar, tyEnum, tyRange, tyString, tySequence:
     let val = llvm.buildLoad(module.ll_builder, adr, "")
     gen_copy(module, dst, val, typ)
   else:
@@ -456,7 +456,8 @@ proc gen_magic_length(module: BModule; node: PNode): ValueRef =
   #echo "gen_magic_length"
   let sym_node = if node[1].kind == nkHiddenDeref: node[1][0] else: node[1]
   #debug sym_node
-  case sym_node.typ.kind:
+  let typ = skipTypes(sym_node.typ, abstractInst)
+  case typ.kind:
   of tyOpenArray, tyVarargs:
     let struct = gen_expr_lvalue(module, sym_node).val
     assert_value_type(struct, PointerTypeKind)
@@ -464,8 +465,11 @@ proc gen_magic_length(module: BModule; node: PNode): ValueRef =
     assert_value_type(len_field, PointerTypeKind)
     result = llvm.buildLoad(module.ll_builder, len_field, "magic.openarray.len")
     assert_value_type(result, IntegerTypeKind)
+  of tySequence:
+    let seq = gen_expr(module, sym_node).val
+    result = build_nim_seq_len(module, seq)
   else:
-    assert false, $sym_node.typ.kind
+    assert false, $typ.kind
 
 proc gen_magic_eq_proc(module: BModule; node: PNode): ValueRef =
   if node[1].typ.callConv == ccClosure:
@@ -478,13 +482,14 @@ proc gen_magic_eq_proc(module: BModule; node: PNode): ValueRef =
     result = llvm.buildICmp(module.ll_builder, IntEQ, lhs, rhs, "eq.proc")
 
 proc gen_magic_swap(module: BModule; node: PNode): ValueRef =
+  let typ = skipTypes(node[1].typ, abstractInst)
   let lhs = gen_expr_lvalue(module, node[1]).val
   let rhs = gen_expr_lvalue(module, node[2]).val
-  let ll_type = get_type(module, node[1].typ)
+  let ll_type = get_type(module, typ)
   let tmp = build_entry_alloca(module, ll_type, "swap.tmp")
-  gen_copy_lvalue(module, tmp, lhs, node[1].typ)
-  gen_copy_lvalue(module, lhs, rhs, node[1].typ)
-  gen_copy_lvalue(module, rhs, tmp, node[1].typ)
+  gen_copy_lvalue(module, tmp, lhs, typ)
+  gen_copy_lvalue(module, lhs, rhs, typ)
+  gen_copy_lvalue(module, rhs, tmp, typ)
 
 proc gen_magic_new(module: BModule; node: PNode): ValueRef =
   let bval = gen_expr_lvalue(module, node[1])
@@ -530,6 +535,22 @@ proc gen_magic_of(module: BModule; node: PNode): ValueRef =
       gen_call_runtime_proc(module, "isObj", @[m_type, subclass_type_info])
   do:
     llvm.constInt(module.ll_mem_bool, culonglong 0, Bool 0)
+
+proc gen_magic_high(module: BModule; node: PNode): ValueRef =
+  let length = gen_magic_length(module, node)
+  result = llvm.buildSub(module.ll_builder,
+    length,
+    llvm.constInt(llvm.typeOf(length), 1, Bool 1),
+    "high")
+
+proc gen_magic_move(module: BModule; node: PNode): BValue =
+  # todo
+  if node.len == 4:
+    discard
+  else:
+    discard
+
+  result = gen_expr(module, node[1])
 
 proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): BValue =
 
@@ -696,6 +717,8 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): BValue =
   of mOrd: result.val = gen_magic_ord(module, node)
   of mDotDot: result.val = gen_call_runtime_proc(module, node)
   of mOf: result.val = gen_magic_of(module, node)
+  of mHigh: result.val = gen_magic_high(module, node)
+  of mMove: result = gen_magic_move(module, node)
   # sets
   of mIncl: gen_incl_set(module, node)
   of mExcl: gen_excl_set(module, node)
@@ -854,13 +877,13 @@ proc gen_dot_expr_lvalue(module: BModule; node: PNode): BValue =
   let lhs = gen_expr_lvalue(module, node[0])
 
   let field = node[1].sym
-  let object_type = node[0].typ
+  let object_type = skipTypes(node[0].typ, abstractInst)
 
-  if node[0].typ.kind == tyObject:
+  if object_type.kind == tyObject:
     result.val = build_field_access(module, object_type, lhs.val, field)
     result.storage = lhs.storage
-  elif node[0].typ.kind == tyTuple:
-    for index, tuple_field in node[0].typ.n.sons:
+  elif object_type.kind == tyTuple:
+    for index, tuple_field in object_type.n.sons:
       if tuple_field.kind == nkSym:
         if tuple_field.sym.id == field.id:
           let ll_index = constant(module, int32 index)
@@ -868,7 +891,7 @@ proc gen_dot_expr_lvalue(module: BModule; node: PNode): BValue =
           result.storage = lhs.storage
           break
   else:
-    assert false, $(node[0].typ.kind)
+    assert false, $(object_type.kind)
 
   assert result.val != nil
 
@@ -903,7 +926,7 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): BValue =
   let rhs = gen_expr(module, node[1])
   assert lhs.val != nil
   assert rhs.val != nil
-  case node[0].typ.kind:
+  case skipTypes(node[0].typ, abstractInst).kind:
   of tyArray:
     var indices = [constant_int(module, 0), rhs.val]
     result.val = llvm.buildGEP(module.ll_builder, lhs.val, addr indices[0], cuint len indices, "array.index")
@@ -946,7 +969,7 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): BValue =
     result.val = build_field_ptr(module, struct, rhs.val, "tuple.[]")
     result.storage = lhs.storage
   else:
-    assert false
+    assert false, $(node[0].typ.kind)
 
 proc gen_bracket_expr(module: BModule; node: PNode): BValue =
   let adr = gen_bracket_expr_lvalue(module, node)
@@ -960,7 +983,8 @@ proc gen_deref_expr_lvalue(module: BModule; node: PNode): BValue =
   let adr = gen_expr_lvalue(module, node[0])
   # usrToCell(p).refcount
   # usrToCell(p)[].refcount ignore
-  if node[0].kind == nkCall and live_as_pointer(module, node.typ) and node.kind == nkHiddenDeref:
+  let dst_type = skipTypes(node.typ, abstractInst)
+  if node[0].kind == nkCall and live_as_pointer(module, dst_type) and node.kind == nkHiddenDeref:
     result = adr
   else:
     result.val = llvm.buildLoad(module.ll_builder, adr.val, "deref.lvalue")
@@ -968,7 +992,9 @@ proc gen_deref_expr_lvalue(module: BModule; node: PNode): BValue =
 proc gen_deref_expr(module: BModule; node: PNode): BValue =
   # *value -> value
   let adr = gen_expr(module, node[0]).val
-  if node[0].typ.kind == tyVar and live_as_pointer(module, node.typ) and node.kind == nkHiddenDeref:
+  let dst_type = skipTypes(node.typ, abstractInst)
+  let val_type = skipTypes(node[0].typ, abstractInst)
+  if val_type.kind == tyVar and live_as_pointer(module, dst_type) and node.kind == nkHiddenDeref:
     # proc p1(p: Foo)
     # proc p2(p: var Foo) = p1(p)
     #                          p[] # ← ignore hidden deref here

@@ -13,6 +13,7 @@ proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef 
   let target = find_module(module, sym)
   result = target.get_value(sym)
 
+  let typ = skipTypes(sym.typ, abstractInst)
   let ll_type = get_type(target, sym.typ)
 
   if result == nil: # else we already have variable declared somehow...
@@ -45,18 +46,19 @@ proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef 
       let value = gen_expr(target, initializer).val
       assert value != nil, $initializer.kind
       assert result != nil
-      gen_copy(target, result, value, initializer.typ)
+      gen_copy(target, result, value, skipTypes(initializer.typ, abstractInst))
 
 
 proc build_local_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
-  let ll_type = get_type(module, sym.typ)
+  let typ = skipTypes(sym.typ, abstractInst)
+  let ll_type = get_type(module, typ)
   let name = mangle_local_var_name(module, sym)
 
   result = build_entry_alloca(module, ll_type, name)
   module.add_value(sym, result)
 
   if initializer == nil or initializer.kind == nkEmpty:
-    gen_default_init(module, sym.typ, result)
+    gen_default_init(module, typ, result)
   else:
     let value = gen_expr(module, initializer).val
     assert value != nil, $initializer.kind
@@ -67,8 +69,8 @@ proc gen_var_prototype(module: BModule; node: PNode): BValue =
   let sym = node.sym
   result.val = module.get_value(sym)
   if (result.val == nil):
-
-    let ll_type = get_type(module, node.sym.typ)
+    let typ = skipTypes(node.sym.typ, abstractInst)
+    let ll_type = get_type(module, typ)
     let name = mangle_global_var_name(module, sym)
     result.val = llvm.addGlobal(module.ll_module, ll_type, name)
     module.add_value(sym, result.val)

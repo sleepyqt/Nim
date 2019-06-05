@@ -42,7 +42,7 @@ proc gen_proc_body(module: BModule; sym: PSym) =
     # save current bb for nested procs
     let incoming_bb = llvm.getInsertBlock(module.ll_builder)
 
-    let ret_type   = getReturnType(sym)
+    let ret_type   = if getReturnType(sym) == nil: nil else: skipTypes(getReturnType(sym), abstractInst)
     let entry_bb   = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "entry")
     let return_bb  = llvm.appendBasicBlockInContext(module.ll_context, proc_val, "return")
     var result_var: ValueRef # addres of *result* variable
@@ -111,15 +111,22 @@ proc gen_proc_body(module: BModule; sym: PSym) =
     # - - - - -  geberate formal parameters - - - - -
 
     for ast_param in sym.typ.n.sons[1 .. ^1]:
-      let arg_info = abi.classify_argument_type(module, ast_param.typ)
+      let ast_param_typ = skipTypes(ast_param.typ, abstractInst)
+      assert ast_param_typ != nil
+
+      if isCompileTimeOnly(ast_param.typ):
+        inc ast_param_index
+        continue
+
+      let arg_info = abi.classify_argument_type(module, ast_param_typ)
 
       when spam_proc:
-        echo "** param: ", ast_param.sym.name.s, ", type: ", ast_param.typ.kind, ", class: ", arg_info.class
+        echo "** param: ", ast_param.sym.name.s, ", type: ", ast_param_typ.kind, ", class: ", arg_info.class
 
       case arg_info.class
 
       of ArgClass.Direct:
-        let ll_type   = get_proc_param_type(module, ast_param.typ)
+        let ll_type   = get_proc_param_type(module, ast_param_typ)
         let local_adr = build_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
         let value     = llvm.getParam(proc_val, cuint ir_param_index)
         discard llvm.buildStore(module.ll_builder, value, local_adr)
@@ -139,12 +146,12 @@ proc gen_proc_body(module: BModule; sym: PSym) =
         inc ir_param_index
 
       of ArgClass.Expand:
-        let ll_type   = get_proc_param_type(module, ast_param.typ)
+        let ll_type   = get_proc_param_type(module, ast_param_typ)
         let local_adr = build_entry_alloca(module, ll_type, "param." & ast_param.sym.name.s)
         module.add_value(ast_param.sym, local_adr)
 
         if ExpandToWords in arg_info.flags:
-          var expanded     = expand_struct_to_words(module, ast_param.typ)
+          var expanded     = expand_struct_to_words(module, ast_param_typ)
           let bitcast_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool 0)
           let abi_cast     = llvm.buildBitCast(module.ll_builder, local_adr, llvm.pointerType(bitcast_type, 0), "abi_cast")
           for i, item in expanded:
@@ -175,7 +182,7 @@ proc gen_proc_body(module: BModule; sym: PSym) =
         let data = llvm.getParam(proc_val, cuint ir_param_index + 0)
         let length = llvm.getParam(proc_val, cuint ir_param_index + 1)
         let name = "param." & ast_param.sym.name.s
-        let local_adr = build_open_array(module, ast_param.typ.elemType, data, length, name)
+        let local_adr = build_open_array(module, ast_param_typ.elemType, data, length, name)
         module.add_value(ast_param.sym, local_adr)
         inc ir_param_index, 2
 
@@ -274,7 +281,7 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
   assert proc_type != nil
   assert proc_type.kind == tyProc
   let abi = get_abi(module)
-  let ret_type = proc_type[0]
+  let ret_type = if proc_type[0] == nil: nil else: skipTypes(proc_type[0], abstractInst)
   var ret_info: ArgInfo
   var ll_args: seq[ValueRef]
 
@@ -301,7 +308,11 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
 
   var index = 0
   for arg_value in arguments:
-    let arg_type = arguments_types[index]
+    if isCompileTimeOnly(arguments_types[index]):
+      inc index
+      continue
+
+    let arg_type = skipTypes(arguments_types[index], abstractInst)
     let arg_info = abi.classify_argument_type(module, arg_type)
 
     # handle openarray

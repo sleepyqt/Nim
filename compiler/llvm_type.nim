@@ -261,20 +261,21 @@ proc get_proc_type(module: BModule; typ: PType): TypeRef =
   if typ[0] == nil:
     return_type = module.ll_void
   else:
-    let return_type_info = abi.classify_return_type(module, typ[0])
+    let ret_type = skipTypes(typ[0], abstractInst)
+    let return_type_info = abi.classify_return_type(module, ret_type)
 
     case return_type_info.class:
 
     of ArgClass.Direct:
-      return_type = get_proc_param_type(module, typ[0])
+      return_type = get_proc_param_type(module, ret_type)
 
     of ArgClass.Indirect:
       return_type = module.ll_void
-      params.add type_to_ptr get_proc_param_type(module, typ[0])
+      params.add type_to_ptr get_proc_param_type(module, ret_type)
 
     of ArgClass.Expand:
-      let ll_type = get_proc_param_type(module, typ[0])
-      var expanded = expand_struct_to_words(module, typ[0])
+      let ll_type = get_proc_param_type(module, ret_type)
+      var expanded = expand_struct_to_words(module, ret_type)
       return_type = llvm.structTypeInContext(module.ll_context, addr expanded[0], cuint len expanded, Bool false)
 
     of ArgClass.Ignore:
@@ -285,32 +286,33 @@ proc get_proc_type(module: BModule; typ: PType): TypeRef =
 
   # formal parameters types
   for param in typ.n.sons[1 .. ^1]:
+    let param_type = skipTypes(param.typ, abstractInst)
     if isCompileTimeOnly(param.typ): continue
 
-    assert param.typ != nil
-    let param_type_info = abi.classify_argument_type(module, param.typ)
+    assert param_type != nil
+    let param_type_info = abi.classify_argument_type(module, param_type)
 
     case param_type_info.class:
 
     of ArgClass.Direct:
-      params.add get_proc_param_type(module, param.typ)
+      params.add get_proc_param_type(module, param_type)
 
     of ArgClass.Indirect:
-      params.add type_to_ptr get_proc_param_type(module, param.typ)
+      params.add type_to_ptr get_proc_param_type(module, param_type)
 
     of ArgClass.Expand:
       if ExpandToWords in param_type_info.flags:
-        let expanded = expand_struct_to_words(module, param.typ)
+        let expanded = expand_struct_to_words(module, param_type)
         for field in expanded: params.add field
       else:
-        let expanded = expand_struct(module, get_proc_param_type(module, param.typ))
+        let expanded = expand_struct(module, get_proc_param_type(module, param_type))
         for field in expanded: params.add field
 
     of ArgClass.Ignore:
       discard
 
     of ArgClass.OpenArray:
-      params.add get_proc_param_type(module, param.typ) # ptr T
+      params.add get_proc_param_type(module, param_type) # ptr T
       params.add module.ll_int # length
 
   assert return_type != nil
