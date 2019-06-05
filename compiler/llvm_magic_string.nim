@@ -109,7 +109,15 @@ proc gen_magic_length_str(module: BModule; node: PNode): ValueRef =
   else:
     assert false
 
-proc gen_magic_append_str_str(module: BModule; node: PNode): ValueRef =
+proc gen_magic_append_str_str(module: BModule; node: PNode) =
+
+  # str &= "foo " & "bar" & 'c' * derp
+  # resizeString(str, 3 + 3 + 1 + derp.len)
+  # appendString(str, "foo")
+  # appendString(str, "bar")
+  # appendChar(str, 'c')
+  # appendString(str, derp)
+
   let str = gen_expr(module, node[1]).val
 
   # build `length` expression
@@ -118,13 +126,14 @@ proc gen_magic_append_str_str(module: BModule; node: PNode): ValueRef =
   var length_expr: ValueRef = constant_int(module, 0)
   var strings: seq[ValueRef]
   for i in 2 ..< sonsLen(node):
-    strings.add gen_expr(module, node[i]).val
+    let value = gen_expr(module, node[i]).val
+    strings.add value
     if node[i].typ.kind == tyChar:
       inc(length)
     elif node[i].kind in {nkStrLit .. nkTripleStrLit}:
       inc(length, len(node[i].strVal))
     else:
-      let string_length = build_nim_seq_len(module, str)
+      let string_length = build_nim_seq_len(module, value)
       length_expr = llvm.buildAdd(module.ll_builder, string_length, length_expr, "")
 
   if length > 0:
@@ -138,6 +147,47 @@ proc gen_magic_append_str_str(module: BModule; node: PNode): ValueRef =
       discard gen_call_runtime_proc(module, "appendChar", @[str, str_add])
     else:
       discard gen_call_runtime_proc(module, "appendString", @[str, str_add])
+
+proc gen_magic_con_str_str(module: BModule; node: PNode): BValue =
+
+  # s = "foo " & "bar" & 'c' * derp
+  # tmp = rawNewString(3 + 3 + 1 + derp.len)
+  # appendString(tmp, "foo")
+  # appendString(tmp, "bar")
+  # appendChar(tmp, 'c')
+  # appendString(tmp, derp)
+  # result = s
+
+  # build `length` expression
+
+  var length = 0
+  var length_expr: ValueRef = constant_int(module, 0)
+  var strings: seq[ValueRef]
+  for i in 1 ..< sonsLen(node):
+    let value = gen_expr(module, node[i]).val
+    strings.add value
+    if node[i].typ.kind == tyChar:
+      inc(length)
+    elif node[i].kind in {nkStrLit .. nkTripleStrLit}:
+      inc(length, len(node[i].strVal))
+    else:
+      let string_length = build_nim_seq_len(module, value)
+      length_expr = llvm.buildAdd(module.ll_builder, string_length, length_expr, "")
+
+  if length > 0:
+    length_expr = llvm.buildAdd(module.ll_builder, constant_int(module, 0), length_expr, "total_length")
+
+  let tmp = gen_call_runtime_proc(module, "rawNewString", @[length_expr])
+
+  for i in 1 ..< sonsLen(node):
+    let str_add = strings[i - 1]
+    if node[i].typ.kind == tyChar:
+      discard gen_call_runtime_proc(module, "appendChar", @[tmp, str_add])
+    else:
+      discard gen_call_runtime_proc(module, "appendString", @[tmp, str_add])
+
+  result.val = tmp
+  result.storage = OnHeap
 
 proc gen_magic_append_str_ch(module: BModule; node: PNode): ValueRef =
   let str = gen_expr(module, node[1]).val
@@ -185,11 +235,6 @@ proc gen_magic_chr(module: BModule; node: PNode): ValueRef =
   let value = gen_expr(module, node[1]).val
   let ll_type = get_type(module, node.typ)
   result = llvm.buildTrunc(module.ll_builder, value, ll_type, "magic.chr")
-
-proc gen_magic_con_str_str(module: BModule; node: PNode): ValueRef =
-  # todo
-  debug node
-  assert false
 
 proc gen_magic_eq_str(module: BModule; node: PNode): ValueRef =
   let lhs = gen_expr(module, node[1]).val

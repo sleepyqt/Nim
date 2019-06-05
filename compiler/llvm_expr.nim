@@ -531,7 +531,7 @@ proc gen_magic_of(module: BModule; node: PNode): ValueRef =
   do:
     llvm.constInt(module.ll_mem_bool, culonglong 0, Bool 0)
 
-proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
+proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): BValue =
 
   proc unary(prc: UnaryProc): ValueRef =
     let lhs = gen_expr(module, node[1]).val
@@ -617,139 +617,139 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): ValueRef =
     result = build_i1_to_i8(module, result)
 
   case op:
-  of mMinI: result = min_int()
-  of mMaxI: result = max_int()
-  of mAbsI: result = abs_int()
+  of mMinI: result.val = min_int()
+  of mMaxI: result.val = max_int()
+  of mAbsI: result.val = abs_int()
   # signed int
-  of mAddI: result = binary(llvm.buildAdd)
-  of mSubI: result = binary(llvm.buildSub)
-  of mMulI: result = binary(llvm.buildMul)
-  of mDivI: result = binary(llvm.buildSDiv)
-  of mModI: result = binary(llvm.buildSRem)
-  of mUnaryMinusI, mUnaryMinusI64: result = unary_minus()
-  of mUnaryPlusI: result = gen_expr(module, node[1]).val
+  of mAddI: result.val = binary(llvm.buildAdd)
+  of mSubI: result.val = binary(llvm.buildSub)
+  of mMulI: result.val = binary(llvm.buildMul)
+  of mDivI: result.val = binary(llvm.buildSDiv)
+  of mModI: result.val = binary(llvm.buildSRem)
+  of mUnaryMinusI, mUnaryMinusI64: result.val = unary_minus()
+  of mUnaryPlusI: result.val = gen_expr(module, node[1]).val
   # unsigned int
-  of mAddU: result = binary(llvm.buildAdd)
-  of mSubU: result = binary(llvm.buildSub)
-  of mMulU: result = binary(llvm.buildMul)
-  of mDivU: result = binary(llvm.buildUDiv)
-  of mModU: result = binary(llvm.buildURem)
+  of mAddU: result.val = binary(llvm.buildAdd)
+  of mSubU: result.val = binary(llvm.buildSub)
+  of mMulU: result.val = binary(llvm.buildMul)
+  of mDivU: result.val = binary(llvm.buildUDiv)
+  of mModU: result.val = binary(llvm.buildURem)
   # integer cmp
-  of mEqI: result = cmp_int(llvm.IntEQ)
-  of mLeI: result = cmp_int(llvm.IntSLE)
-  of mLtI: result = cmp_int(llvm.IntSLT)
+  of mEqI: result.val = cmp_int(llvm.IntEQ)
+  of mLeI: result.val = cmp_int(llvm.IntSLE)
+  of mLtI: result.val = cmp_int(llvm.IntSLT)
   # unsigned cmp
-  of mLeU: result = cmp_int(llvm.IntULE)
-  of mLtU: result = cmp_int(llvm.IntULT)
+  of mLeU: result.val = cmp_int(llvm.IntULE)
+  of mLtU: result.val = cmp_int(llvm.IntULT)
   # char cmp
-  of mEqCh: result = cmp_int(llvm.IntEQ)
-  of mLtCh: result = cmp_int(llvm.IntULT)
-  of mLeCh: result = cmp_int(llvm.IntULE)
+  of mEqCh: result.val = cmp_int(llvm.IntEQ)
+  of mLtCh: result.val = cmp_int(llvm.IntULT)
+  of mLeCh: result.val = cmp_int(llvm.IntULE)
   # bool cmp
-  of mEqB: result = cmp_int(llvm.IntEQ)
-  of mLtB: result = cmp_int(llvm.IntULT)
-  of mLeB: result = cmp_int(llvm.IntULE)
+  of mEqB: result.val = cmp_int(llvm.IntEQ)
+  of mLtB: result.val = cmp_int(llvm.IntULT)
+  of mLeB: result.val = cmp_int(llvm.IntULE)
   # ref cmp
-  of mEqRef: result = cmp_int(llvm.IntEQ)
-  of mEqUntracedRef: result = cmp_int(llvm.IntEQ)
-  of mLePtr: result = cmp_int(llvm.IntULE)
-  of mLtPtr: result = cmp_int(llvm.IntULT)
+  of mEqRef: result.val = cmp_int(llvm.IntEQ)
+  of mEqUntracedRef: result.val = cmp_int(llvm.IntEQ)
+  of mLePtr: result.val = cmp_int(llvm.IntULE)
+  of mLtPtr: result.val = cmp_int(llvm.IntULT)
   # enum cmp
-  of mEqEnum: result = cmp_int(llvm.IntEQ)
-  of mLeEnum: result = cmp_int(if is_signed_type(node.typ): IntSLE else: IntULE)
-  of mLtEnum: result = cmp_int(if is_signed_type(node.typ): IntSLT else: IntULT)
+  of mEqEnum: result.val = cmp_int(llvm.IntEQ)
+  of mLeEnum: result.val = cmp_int(if is_signed_type(node.typ): IntSLE else: IntULE)
+  of mLtEnum: result.val = cmp_int(if is_signed_type(node.typ): IntSLT else: IntULT)
   # proc cmp
-  of mEqProc: result = gen_magic_eq_proc(module, node)
+  of mEqProc: result.val = gen_magic_eq_proc(module, node)
   #of mLeU64: discard
   #of mLtU64: discard
   # boolean
-  of mOr, mAnd: result = gen_logic_or_and(module, node, op)
-  of mXor: result = binary(llvm.buildXor)
-  of mNot: result = unary(llvm.buildNot)
+  of mOr, mAnd: result.val = gen_logic_or_and(module, node, op)
+  of mXor: result.val = binary(llvm.buildXor)
+  of mNot: result.val = unary(llvm.buildNot)
   # bitwise
-  of mShrI: result = binary(llvm.buildLShr)
-  of mShlI: result = binary(llvm.buildShl)
-  of mAshrI: result = binary(llvm.buildAShr)
-  of mBitandI: result = binary(llvm.buildAnd)
-  of mBitorI: result = binary(llvm.buildOr)
-  of mBitxorI: result = binary(llvm.buildXor)
-  of mBitnotI: result = unary(llvm.buildNot)
+  of mShrI: result.val = binary(llvm.buildLShr)
+  of mShlI: result.val = binary(llvm.buildShl)
+  of mAshrI: result.val = binary(llvm.buildAShr)
+  of mBitandI: result.val = binary(llvm.buildAnd)
+  of mBitorI: result.val = binary(llvm.buildOr)
+  of mBitxorI: result.val = binary(llvm.buildXor)
+  of mBitnotI: result.val = unary(llvm.buildNot)
   # float
-  of mMinF64: result = min_float()
-  of mMaxF64: result = max_float()
-  of mAbsF64: result = abs_float()
+  of mMinF64: result.val = min_float()
+  of mMaxF64: result.val = max_float()
+  of mAbsF64: result.val = abs_float()
   # float arith
-  of mAddF64: result = float_binary(llvm.buildFAdd)
-  of mSubF64: result = float_binary(llvm.buildFSub)
-  of mMulF64: result = float_binary(llvm.buildFMul)
-  of mDivF64: result = float_binary(llvm.buildFDiv)
+  of mAddF64: result.val = float_binary(llvm.buildFAdd)
+  of mSubF64: result.val = float_binary(llvm.buildFSub)
+  of mMulF64: result.val = float_binary(llvm.buildFMul)
+  of mDivF64: result.val = float_binary(llvm.buildFDiv)
   # float cmp
-  of mEqF64: result = cmp_float(llvm.RealOEQ)
-  of mLeF64: result = cmp_float(llvm.RealOLE)
-  of mLtF64: result = cmp_float(llvm.RealOLT)
+  of mEqF64: result.val = cmp_float(llvm.RealOEQ)
+  of mLeF64: result.val = cmp_float(llvm.RealOLE)
+  of mLtF64: result.val = cmp_float(llvm.RealOLT)
   # misc
   of mEcho: gen_magic_echo(module, node)
   of mInc: gen_magic_inc(module, node)
   of mDec: gen_magic_dec(module, node)
-  of mLengthOpenArray: result = gen_magic_length(module, node)
-  of mSwap: result = gen_magic_swap(module, node)
-  of mOrd: result = gen_magic_ord(module, node)
-  of mDotDot: result = gen_call_runtime_proc(module, node)
-  of mOf: result = gen_magic_of(module, node)
+  of mLengthOpenArray: result.val = gen_magic_length(module, node)
+  of mSwap: result.val = gen_magic_swap(module, node)
+  of mOrd: result.val = gen_magic_ord(module, node)
+  of mDotDot: result.val = gen_call_runtime_proc(module, node)
+  of mOf: result.val = gen_magic_of(module, node)
   # sets
   of mIncl: gen_incl_set(module, node)
   of mExcl: gen_excl_set(module, node)
-  of mCard: result = gen_card_set(module, node)
-  of mLtSet: result = gen_lt_set(module, node)
-  of mLeSet: result = gen_le_set(module, node)
-  of mEqSet: result = gen_eq_set(module, node)
-  of mMulSet: result = gen_mul_set(module, node)
-  of mPlusSet: result = gen_plus_set(module, node)
-  of mMinusSet: result = gen_minus_set(module, node)
-  of mSymDiffSet: result = gen_sym_diff_set(module, node)
-  of mInSet: result = gen_magic_in_set(module, node)
+  of mCard: result.val = gen_card_set(module, node)
+  of mLtSet: result.val = gen_lt_set(module, node)
+  of mLeSet: result.val = gen_le_set(module, node)
+  of mEqSet: result.val = gen_eq_set(module, node)
+  of mMulSet: result.val = gen_mul_set(module, node)
+  of mPlusSet: result.val = gen_plus_set(module, node)
+  of mMinusSet: result.val = gen_minus_set(module, node)
+  of mSymDiffSet: result.val = gen_sym_diff_set(module, node)
+  of mInSet: result.val = gen_magic_in_set(module, node)
   # Heap
-  of mNew: result = gen_magic_new(module, node)
-  of mIsNil: result = gen_magic_is_nil(module, node)
+  of mNew: result.val = gen_magic_new(module, node)
+  of mIsNil: result.val = gen_magic_is_nil(module, node)
   # seq
-  of mLengthSeq: result = gen_magic_length_seq(module, node)
-  of mAppendSeqElem: result = gen_magic_append_seq_elem(module, node)
-  of mNewSeq: result = gen_magic_new_seq(module, node)
-  of mNewSeqOfCap: result = gen_magic_new_seq_of_cap(module, node)
+  of mLengthSeq: result.val = gen_magic_length_seq(module, node)
+  of mAppendSeqElem: result.val = gen_magic_append_seq_elem(module, node)
+  of mNewSeq: result.val = gen_magic_new_seq(module, node)
+  of mNewSeqOfCap: result.val = gen_magic_new_seq_of_cap(module, node)
   # strings
-  of mLengthStr: result = gen_magic_length_str(module, node)
+  of mLengthStr: result.val = gen_magic_length_str(module, node)
   of mNewString, mNewStringOfCap, mExit, mParseBiggestFloat:
-    result = gen_call_runtime_proc(module, node)
-  of mCopyStr: result = gen_call_runtime_proc(module, node)
-  of mEqCString: result = gen_call_expr(module, node)
+    result.val = gen_call_runtime_proc(module, node)
+  of mCopyStr: result.val = gen_call_runtime_proc(module, node)
+  of mEqCString: result.val = gen_call_expr(module, node)
   # of mSetLengthStr:
   # of mCopyStr:
   # of mCopyStrLast:
   of mConStrStr: result = gen_magic_con_str_str(module, node)
-  of mAppendStrCh: result = gen_magic_append_str_ch(module, node)
-  of mAppendStrStr: result = gen_magic_append_str_str(module, node)
-  of mSetLengthStr: result = gen_magic_set_length_str(module, node)
-  of mChr: result = gen_magic_chr(module, node)
+  of mAppendStrCh: result.val = gen_magic_append_str_ch(module, node)
+  of mAppendStrStr: gen_magic_append_str_str(module, node)
+  of mSetLengthStr: result.val = gen_magic_set_length_str(module, node)
+  of mChr: result.val = gen_magic_chr(module, node)
   # of mAppendSeqElem:
-  of mEqStr: result = gen_magic_eq_str(module, node)
-  of mLeStr: result = gen_magic_le_str(module, node)
-  of mLtStr: result = gen_magic_lt_str(module, node)
-  of mIntToStr: result = gen_magic_int_to_str(module, node)
-  of mInt64ToStr: result = gen_magic_int64_to_str(module, node)
-  of mBoolToStr: result = gen_magic_bool_to_str(module, node)
-  of mCharToStr: result = gen_magic_char_to_str(module, node)
-  of mFloatToStr: result = gen_magic_float_to_str(module, node)
-  of mCStrToStr: result = gen_magic_cstr_to_str(module, node)
+  of mEqStr: result.val = gen_magic_eq_str(module, node)
+  of mLeStr: result.val = gen_magic_le_str(module, node)
+  of mLtStr: result.val = gen_magic_lt_str(module, node)
+  of mIntToStr: result.val = gen_magic_int_to_str(module, node)
+  of mInt64ToStr: result.val = gen_magic_int64_to_str(module, node)
+  of mBoolToStr: result.val = gen_magic_bool_to_str(module, node)
+  of mCharToStr: result.val = gen_magic_char_to_str(module, node)
+  of mFloatToStr: result.val = gen_magic_float_to_str(module, node)
+  of mCStrToStr: result.val = gen_magic_cstr_to_str(module, node)
   # of mStrToStr:
   # of mEnumToStr:
   # conv
-  of mToFloat: result = gen_magic_to_float(module, node)
+  of mToFloat: result.val = gen_magic_to_float(module, node)
   of mZe8ToI .. mZeIToI64:
     let val = gen_expr(module, node[1]).val
-    result = llvm.buildZExt(module.ll_builder, val, get_type(module, node.typ), "zetoi")
+    result.val = llvm.buildZExt(module.ll_builder, val, get_type(module, node.typ), "zetoi")
   of mToU8 .. mToU32:
     let val = gen_expr(module, node[1]).val
-    result = llvm.buildTrunc(module.ll_builder, val, get_type(module, node.typ), "tou")
+    result.val = llvm.buildTrunc(module.ll_builder, val, get_type(module, node.typ), "tou")
   else: echo "unknown magic: ", op, " ", file_info(module, node)
 
 proc gen_obj_down_conv(module: BModule; node: PNode): BValue =
@@ -773,7 +773,7 @@ proc gen_obj_up_conv(module: BModule; node: PNode): BValue =
 
 proc gen_call(module: BModule; node: PNode): BValue =
   if node[0].kind == nkSym and node[0].sym.magic != mNone:
-    result.val = gen_magic_expr(module, node, node[0].sym.magic)
+    result = gen_magic_expr(module, node, node[0].sym.magic)
   else:
     result.val = gen_call_expr(module, node)
 
