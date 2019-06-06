@@ -21,7 +21,7 @@ proc gen_copy(module: BModule; dst, val: ValueRef; typ: PType) =
   of tyFloat, tyFloat32, tyFloat64:
     discard llvm.buildStore(module.ll_builder, val, dst)
 
-  of tyPtr, tyPointer, tyCString:
+  of tyPtr, tyPointer, tyCString, tyVar:
     assert_value_type(val, PointerTypeKind)
     discard llvm.buildStore(module.ll_builder, val, dst)
 
@@ -113,7 +113,7 @@ proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef) =
   of tyFloat32:
     let zero = llvm.constReal(module.ll_float32, 0d)
     discard llvm.buildStore(module.ll_builder, zero, alloca)
-  of tyPointer, tyPtr, tyRef, tyCString, tyString, tySequence:
+  of tyPointer, tyPtr, tyRef, tyCString, tyString, tySequence, tyVar:
     let null = llvm.constNull(get_type(module, typ))
     discard llvm.buildStore(module.ll_builder, null, alloca)
   of tyEnum:
@@ -157,6 +157,27 @@ proc build_object_init(module: BModule; dest: ValueRef; typ: PType) =
     let type_info = gen_type_info(module, typ)
     discard gen_call_runtime_proc(module, "objectInit", @[dest, type_info])
 
+proc build_ref_assign(module: BModule; dst, src: BValue) =
+  assert_value_type(dst.val, PointerTypeKind)
+  assert_value_type(src.val, PointerTypeKind)
+
+  echo ">>>> build_ref_assign <<<<"
+  echo ">> dst: ", dst
+  echo ">> src: ", src
+
+  let config = module.module_list.config
+
+  if (dst.storage == OnStack and config.selectedGC != gcGo) or usesWriteBarrier(config) == false:
+    discard llvm.buildStore(module.ll_builder, src.val, dst.val)
+  elif dst.storage == OnHeap:
+    let dst_cast = llvm.buildBitCast(module.ll_builder, dst.val, type_to_ptr module.ll_pointer, "ref.assign.dst")
+    let src_cast = llvm.buildBitCast(module.ll_builder, src.val, module.ll_pointer, "ref.assign.src")
+    discard gen_call_runtime_proc(module, "asgnRef", @[dst_cast, src_cast])
+  else:
+    let dst_cast = llvm.buildBitCast(module.ll_builder, dst.val, type_to_ptr module.ll_pointer, "ref.assign.dst")
+    let src_cast = llvm.buildBitCast(module.ll_builder, src.val, module.ll_pointer, "ref.assign.src")
+    discard gen_call_runtime_proc(module, "unsureAsgnRef", @[dst_cast, src_cast])
+
 proc can_move(module: BModule; val, dst: BValue): bool =
   false # todo
 
@@ -183,6 +204,20 @@ proc build_assign(module: BModule; dst, src: BValue; typ: PType; copy: bool = fa
     else:
       discard
     gen_copy(module, dst.val, src.val, typ)
+  of tySequence:
+    echo "~~ build_assign:"
+    echo "~~   dst: ", dst
+    echo "~~   src: ", src
+    echo "~~   copy: ", copy
+    echo "~~   typ: ", typ.kind
+    if config.selectedGC == gcDestructors:
+      discard "todo"
+    elif (copy == false and src.storage != OnStatic) or can_move(module, src, dst):
+      build_ref_assign(module, dst, src)
+    else:
+      let dst_cast = llvm.buildBitCast(module.ll_builder, dst.val, type_to_ptr module.ll_pointer, "assign.seq.dst")
+      let src_cast = llvm.buildBitCast(module.ll_builder, src.val, module.ll_pointer, "assign.seq.src")
+      discard gen_call_runtime_proc(module, "genericSeqAssign", @[dst_cast, src_cast, gen_type_info(module, typ)])
   else:
     gen_copy(module, dst.val, src.val, typ)
 
@@ -218,16 +253,46 @@ proc build_new_obj(module: BModule; dest: BValue; typ: PType) =
   build_object_init(module, dest.val, obj_type)
   #todo
 
-proc build_new_seq(module: BModule; dest: ValueRef; typ: PType; length: ValueRef) =
-  assert_value_type(dest, PointerTypeKind)
-  let type_info = gen_type_info(module, typ)
-  var args = @[type_info, length]
-  let allocated_seq = gen_call_runtime_proc(module, "newSeq", args) # i8*
-  let seq_cast_type = get_type(module, typ)
-  assert_value_type(allocated_seq, PointerTypeKind)
-  let seq_cast = llvm.buildBitCast(module.ll_builder, allocated_seq, seq_cast_type, "seq_cast")
-  gen_ref_copy(module, dest, seq_cast)
-  #todo
+proc build_new_seq(module: BModule; dest: BValue; typ: PType; length: ValueRef) =
+  assert_value_type(dest.val, PointerTypeKind)
+  let seq_type = skipTypes(typ, abstractVarRange)
+  let config = module.module_list.config
+
+  let zero_length =
+    (llvm.isConstant(length) == Bool(1)) and (llvm.constIntGetSExtValue(length) == 0)
+
+  # todo
+
+  if (dest.storage == OnHeap) and usesWriteBarrier(config):
+    if canFormAcycle(typ):
+      discard "if ($1) { #nimGCunrefRC1($1); $1 = NIM_NIL; }$n"
+    else:
+      discard "if ($1) { #nimGCunrefNoCycle($1); $1 = NIM_NIL; }$n"
+
+    if not zero_length:
+      if config.selectedGC == gcGo:
+        discard "($1) #newSeq($2, $3)"
+        discard "#unsureAsgnRef((void**) $1, $2);$n"
+      else:
+        discard "($1) #newSeqRC1($2, $3)"
+        discard "$1 = $2;$n"
+  else:
+    if zero_length:
+      discard "nil"
+    else:
+      discard "($1) #newSeq($2, $3)"
+
+  if zero_length:
+    let null = BValue(val: llvm.constNull(get_type(module, seq_type)))
+    build_assign(module, dest, null, seq_type)
+  else:
+    let type_info = gen_type_info(module, seq_type)
+    let seq_cast_type = get_type(module, seq_type)
+
+    let new_seq = gen_call_runtime_proc(module, "newSeq", @[type_info, length])
+    let seq_cast = llvm.buildBitCast(module.ll_builder, new_seq, seq_cast_type, "new.seq.cast")
+    let allocated_seq = BValue(val: seq_cast, storage: OnHeap)
+    build_ref_assign(module, dest, allocated_seq)
 
 # - Literals -------------------------------------------------------------------
 
@@ -298,7 +363,8 @@ proc gen_bracket_lvalue(module: BModule; node: PNode): BValue =
       gen_copy(module, adr, val, item.typ)
   of tySequence:
     let length = constant_int(module, int node.sonsLen)
-    build_new_seq(module, result.val, node.typ, length)
+    result.storage = OnStack
+    build_new_seq(module, result, node.typ, length)
     # {{i64, i64}, i8}**
     let seq = llvm.buildLoad(module.ll_builder, result.val, "")
     # {{i64, i64}, i8}*
@@ -736,9 +802,10 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): BValue =
   of mIsNil: result.val = gen_magic_is_nil(module, node)
   # seq
   of mLengthSeq: result.val = gen_magic_length_seq(module, node)
-  of mAppendSeqElem: result.val = gen_magic_append_seq_elem(module, node)
-  of mNewSeq: result.val = gen_magic_new_seq(module, node)
-  of mNewSeqOfCap: result.val = gen_magic_new_seq_of_cap(module, node)
+  of mAppendSeqElem: gen_magic_append_seq_elem(module, node)
+  of mNewSeq: gen_magic_new_seq(module, node)
+  of mNewSeqOfCap: result = gen_magic_new_seq_of_cap(module, node)
+  of mSetLengthSeq: gen_magic_set_length_seq(module, node)
   # strings
   of mLengthStr: result.val = gen_magic_length_str(module, node)
   of mNewString, mNewStringOfCap, mExit, mParseBiggestFloat:
@@ -753,7 +820,6 @@ proc gen_magic_expr(module: BModule; node: PNode; op: TMagic): BValue =
   of mAppendStrStr: gen_magic_append_str_str(module, node)
   of mSetLengthStr: result.val = gen_magic_set_length_str(module, node)
   of mChr: result.val = gen_magic_chr(module, node)
-  # of mAppendSeqElem:
   of mEqStr: result.val = gen_magic_eq_str(module, node)
   of mLeStr: result.val = gen_magic_le_str(module, node)
   of mLtStr: result.val = gen_magic_lt_str(module, node)
@@ -949,18 +1015,12 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): BValue =
   of tyString:
     # {{i64, i64}, [i8 x 0]}**
     let struct = llvm.buildLoad(module.ll_builder, lhs.val, "")
-    # {{i64, i64}, [i8 x 0]}*
-    let data = build_field_ptr(module, struct, constant(module, int32 1), "string.data.ptr")
-    # [i8 x 0]*
-    var indices = [constant_int(module, 0), rhs.val]
-    result.val = llvm.buildGEP(module.ll_builder, data, addr indices[0], cuint len indices, "string.[]")
+    result.val = build_seq_index(module, struct, rhs.val)
     result.storage = lhs.storage
     # i8*
   of tySequence:
     let struct = llvm.buildLoad(module.ll_builder, lhs.val, "")
-    let data = build_field_ptr(module, struct, constant(module, int32 1), "seq.data.ptr")
-    var indices = [constant_int(module, 0), rhs.val]
-    result.val = llvm.buildGEP(module.ll_builder, data, addr indices[0], cuint len indices, "seq.[]")
+    result.val = build_seq_index(module, struct, rhs.val)
     result.storage = lhs.storage
   of tyTuple:
     # {i64, i64, i64}**

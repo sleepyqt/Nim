@@ -9,17 +9,18 @@ proc gen_asgn(module: BModule; node: PNode) =
 
   build_assign(module, lhs, rhs, typ)
 
-proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
+proc build_global_var(module: BModule; sym: PSym; initializer: PNode): BValue =
   let target = find_module(module, sym)
-  result = target.get_value(sym)
+  result.val = target.get_value(sym)
+  result.storage = OnHeap
 
   let typ = skipTypes(sym.typ, abstractInst)
   let ll_type = get_type(target, sym.typ)
 
-  if result == nil: # else we already have variable declared somehow...
+  if result.val == nil: # else we already have variable declared somehow...
     let name = mangle_global_var_name(target, sym)
-    result = llvm.addGlobal(target.ll_module, ll_type, name)
-    target.add_value(sym, result)
+    result.val = llvm.addGlobal(target.ll_module, ll_type, name)
+    target.add_value(sym, result.val)
 
     when spam_var:
       echo "☺☺ --------------------------------------------------"
@@ -30,40 +31,42 @@ proc build_global_var(module: BModule; sym: PSym; initializer: PNode): ValueRef 
       echo "☺☺ loc flags        : ", sym.loc.flags
       echo "☺☺ --------------------------------------------------"
 
-  if result != nil and llvm.getInitializer(result) == nil:
+  if result.val != nil and llvm.getInitializer(result.val) == nil:
     # Its possible to use global before declaring it.
     # The 'use' will generate prototype, so check if
     # the var is prototype and 'upgrade' it to real variable.
-    llvm.setInitializer(result, llvm.constNull(ll_type))
-    llvm.setVisibility(result, DefaultVisibility)
+    llvm.setInitializer(result.val, llvm.constNull(ll_type))
+    llvm.setVisibility(result.val, DefaultVisibility)
 
     if sfThread in sym.flags:
-      llvm.setThreadLocal(result, Bool 1)
+      llvm.setThreadLocal(result.val, Bool 1)
 
     if initializer == nil or initializer.kind == nkEmpty:
       discard
     else:
-      let value = gen_expr(target, initializer).val
-      assert value != nil, $initializer.kind
-      assert result != nil
-      gen_copy(target, result, value, skipTypes(initializer.typ, abstractInst))
+      let value = gen_expr(target, initializer)
+      assert value.val != nil, $initializer.kind
+      assert result.val != nil
+      #C gen_copy(target, result.val, value.val, skipTypes(initializer.typ, abstractInst))
+      build_assign(module, result, value, skipTypes(initializer.typ, abstractInst))
 
-
-proc build_local_var(module: BModule; sym: PSym; initializer: PNode): ValueRef =
+proc build_local_var(module: BModule; sym: PSym; initializer: PNode): BValue =
   let typ = skipTypes(sym.typ, abstractInst)
   let ll_type = get_type(module, typ)
   let name = mangle_local_var_name(module, sym)
 
-  result = build_entry_alloca(module, ll_type, name)
-  module.add_value(sym, result)
+  result.val = build_entry_alloca(module, ll_type, name)
+  result.storage = OnStack
+  module.add_value(sym, result.val)
 
   if initializer == nil or initializer.kind == nkEmpty:
-    gen_default_init(module, typ, result)
+    gen_default_init(module, typ, result.val)
   else:
-    let value = gen_expr(module, initializer).val
-    assert value != nil, $initializer.kind
-    assert result != nil
-    gen_copy(module, result, value, initializer.typ)
+    let value = gen_expr(module, initializer)
+    assert value.val != nil, $initializer.kind
+    assert result.val != nil
+    #gen_copy(module, result.val, value.val, initializer.typ)
+    build_assign(module, result, value, skipTypes(initializer.typ, abstractInst))
 
 proc gen_var_prototype(module: BModule; node: PNode): BValue =
   let sym = node.sym
@@ -122,10 +125,10 @@ proc gen_tuple_var(module: BModule; node: PNode) =
 
     if sfGlobal in i_sym.flags:
       let variable = build_global_var(module, i_sym, nil)
-      gen_copy(module, variable, field_val, i_sym.typ)
+      gen_copy(module, variable.val, field_val, i_sym.typ)
     else:
       let variable = build_local_var(module, i_sym, nil)
-      gen_copy(module, variable, field_val, i_sym.typ)
+      gen_copy(module, variable.val, field_val, i_sym.typ)
 
 proc gen_single_var(module: BModule; node: PNode) =
   let sym = node[0].sym

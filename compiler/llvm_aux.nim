@@ -36,6 +36,16 @@ template assert_value_type(val: ValueRef; kind: TypeKind) =
       disposeMessage(value_name)
       # assert false
 
+template assert_value_type(val: ValueRef; kind1, kind2: TypeKind) =
+  when true:
+    assert val != nil
+    let typ = llvm.typeOf(val)
+    assert typ != nil
+    let elem_type = llvm.getElementType(typ)
+    assert elem_type != nil
+    assert llvm.getTypeKind(typ) == kind1
+    assert llvm.getTypeKind(elem_type) == kind2
+
 # ------------------------------------------------------------------------------
 
 proc constant(module: BModule; value: int8): ValueRef =
@@ -230,6 +240,74 @@ template build_nil_check(module: BModule; value: ValueRef; code_then, code_else:
   var blocks = [ then_inc, else_inc ]
   llvm.addIncoming(phi, addr values[0], addr blocks[0], 2)
   phi
+
+proc build_cast_generic_seq(module: BModule; seq: ValueRef): ValueRef =
+  assert_value_type(seq, PointerTypeKind)
+  let cast_type = type_to_ptr get_generic_seq_type(module)
+  result = llvm.buildBitCast(module.ll_builder, seq, cast_type, "generic_seq")
+
+proc build_seq_index(module: BModule; seq, index: ValueRef): ValueRef =
+  assert_value_type(seq, PointerTypeKind)
+  assert_value_type(index, IntegerTypeKind)
+  # seq = {{i64, i64}, [i8 x 0]}*
+  let data = build_field_ptr(module, seq, constant(module, int32 1), "seq.data.ptr") # [i8 x 0]*
+  var indices = [constant_int(module, 0), index]
+  result = llvm.buildGEP(module.ll_builder, data, addr indices[0], cuint len indices, "seq[]")
+  assert_value_type(result, PointerTypeKind)
+
+proc build_nim_seq_len_not_nil_lvalue(module: BModule; struct: ValueRef): ValueRef =
+  var indices = [
+    constant(module, int32 0), # strip pointer
+    constant(module, int32 0), # sup: TGenericSeq field
+    constant(module, int32 0)] # length
+  result = llvm.buildGEP(module.ll_builder, struct, addr indices[0], cuint len indices, "seq.len.adr")
+
+proc build_nim_seq_len_not_nil(module: BModule; struct: ValueRef): ValueRef =
+  result = llvm.buildLoad(
+    module.ll_builder,
+    build_nim_seq_len_not_nil_lvalue(module, struct),
+    "seq.len")
+
+proc build_nim_seq_len(module: BModule; struct: ValueRef): ValueRef =
+  # if x != nil: x.sup.length else: 0
+
+  assert_value_type(struct, PointerTypeKind)
+
+  let entry_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(entry_bb)
+  let then_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.then")
+  let else_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.else")
+  let cont_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.cont")
+  llvm.moveBasicBlockAfter(then_bb, entry_bb)
+  llvm.moveBasicBlockAfter(else_bb, then_bb)
+  llvm.moveBasicBlockAfter(cont_bb, else_bb)
+
+  # entry:
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  let null = llvm.constNull(llvm.typeOf(struct))
+  let cond = llvm.buildICmp(module.ll_builder, IntNE, struct, null, "nilcheck")
+  discard llvm.buildCondBr(module.ll_builder, cond, then_bb, else_bb)
+
+  # nilcheck.then:
+  llvm.positionBuilderAtEnd(module.ll_builder, then_bb)
+  let length = build_nim_seq_len_not_nil(module, struct)
+  discard llvm.buildBr(module.ll_builder, cont_bb)
+
+  # nilcheck.else:
+  llvm.positionBuilderAtEnd(module.ll_builder, else_bb)
+  let zero = constant_int(module, 0)
+  discard llvm.buildBr(module.ll_builder, cont_bb)
+
+  # nilcheck.cont
+  llvm.positionBuilderAtEnd(module.ll_builder, cont_bb)
+  let phi = llvm.buildPhi(module.ll_builder, module.ll_int, "seq.length")
+  var values = [ length, zero ]
+  var blocks = [ then_bb, else_bb ]
+  llvm.addIncoming(phi, addr values[0], addr blocks[0], 2)
+
+  result = phi
+
+  assert_value_type(result, IntegerTypeKind)
 
 # ------------------------------------------------------------------------------
 

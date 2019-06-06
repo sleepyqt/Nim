@@ -513,6 +513,11 @@ var setThreadLocal*: proc(globalVar: ValueRef; isThreadLocal: Bool) {.dll.}
 var getThreadLocalMode*: proc(globalVar: ValueRef): ThreadLocalMode {.dll.}
 var setThreadLocalMode*: proc(globalVar: ValueRef; mode: ThreadLocalMode) {.dll.}
 
+var isConstant*: proc(val: ValueRef): Bool {.dll.}
+var constIntGetZExtValue*: proc(constantVal: ValueRef): culonglong {.dll.}
+var constIntGetSExtValue*: proc(constantVal: ValueRef): clonglong {.dll.}
+var constRealGetDouble*: proc(constantVal: ValueRef; losesInfo: ptr Bool): cdouble {.dll.}
+
 # ------------------------------------------------------------------------------
 
 template get_proc(lib: typed; fun: pointer; name: typed): typed =
@@ -859,6 +864,11 @@ proc ll_load_dll*: bool =
     get_proc(lib, setThreadLocal, "LLVMSetThreadLocal")
     get_proc(lib, getThreadLocalMode, "LLVMGetThreadLocalMode")
     get_proc(lib, setThreadLocalMode, "LLVMSetThreadLocalMode")
+
+    get_proc(lib, isConstant, "LLVMIsConstant")
+    get_proc(lib, constIntGetZExtValue, "LLVMConstIntGetZExtValue")
+    get_proc(lib, constIntGetSExtValue, "LLVMConstIntGetSExtValue")
+    get_proc(lib, constRealGetDouble, "LLVMConstRealGetDouble")
 
 # ------------------------------------------------------------------------------
 

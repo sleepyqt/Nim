@@ -21,7 +21,7 @@ import llvm_dll as llvm
 
 const spam_var = false
 const spam_types = false
-const spam_proc = true
+const spam_proc = false
 const spam_rtti = false
 
 # ------------------------------------------------------------------------------
@@ -33,6 +33,7 @@ proc type_to_ptr(value: TypeRef): TypeRef
 proc get_object_case_branch_type(module: BModule; node: PNode): TypeRef
 proc expand_struct_to_words(module: BModule; struct: PType): seq[TypeRef]
 proc expand_struct(module: BModule; struct: TypeRef): seq[TypeRef]
+proc get_generic_seq_type(module: BModule): TypeRef
 
 proc gen_stmt(module: BModule; node: PNode)
 proc gen_expr(module: BModule; node: PNode): BValue
@@ -41,6 +42,9 @@ proc gen_copy(module: BModule; dst, val: ValueRef; typ: PType)
 proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef)
 proc build_cstring_lit(module: BModule; text: string): BValue
 proc build_assign(module: BModule; dst, src: BValue; typ: PType; copy: bool = false)
+proc build_ref_assign(module: BModule; dst, src: BValue)
+proc build_new_obj(module: BModule; dest: BValue; typ: PType)
+proc build_new_seq(module: BModule; dest: BValue; typ: PType; length: ValueRef)
 proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed: bool): ValueRef
 
 # ------------------------------------------------------------------------------

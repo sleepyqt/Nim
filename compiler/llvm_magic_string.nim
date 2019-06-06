@@ -1,85 +1,77 @@
-proc build_nim_seq_len(module: BModule; struct: ValueRef): ValueRef =
-  # if x != nil: x.sup.length else: 0
-
-  assert_value_type(struct, PointerTypeKind)
-
-  let entry_bb = llvm.getInsertBlock(module.ll_builder)
-  let fun = llvm.getBasicBlockParent(entry_bb)
-  let then_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.then")
-  let else_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.else")
-  let cont_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.cont")
-  llvm.moveBasicBlockAfter(then_bb, entry_bb)
-  llvm.moveBasicBlockAfter(else_bb, then_bb)
-  llvm.moveBasicBlockAfter(cont_bb, else_bb)
-
-  # entry:
-  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
-  let null = llvm.constNull(llvm.typeOf(struct))
-  let cond = llvm.buildICmp(module.ll_builder, IntNE, struct, null, "nilcheck")
-  discard llvm.buildCondBr(module.ll_builder, cond, then_bb, else_bb)
-
-  # nilcheck.then:
-  llvm.positionBuilderAtEnd(module.ll_builder, then_bb)
-  var indices = [
-    constant(module, int32 0), # strip pointer
-    constant(module, int32 0), # sup: TGenericSeq field
-    constant(module, int32 0)] # length
-  let length = llvm.buildLoad(
-    module.ll_builder,
-    llvm.buildGEP(module.ll_builder, struct, addr indices[0], cuint len indices, ""),
-    "")
-  discard llvm.buildBr(module.ll_builder, cont_bb)
-
-  # nilcheck.else:
-  llvm.positionBuilderAtEnd(module.ll_builder, else_bb)
-  let zero = constant_int(module, 0)
-  discard llvm.buildBr(module.ll_builder, cont_bb)
-
-  # nilcheck.cont
-  llvm.positionBuilderAtEnd(module.ll_builder, cont_bb)
-  let phi = llvm.buildPhi(module.ll_builder, module.ll_int, "seq.length")
-  var values = [ length, zero ]
-  var blocks = [ then_bb, else_bb ]
-  llvm.addIncoming(phi, addr values[0], addr blocks[0], 2)
-
-  result = phi
-
-  assert_value_type(result, IntegerTypeKind)
 
 # Sequences --------------------------------------------------------------------
 
-proc build_new_seq(module: BModule; seq, len: ValueRef; typ: PType) =
-  discard
+proc gen_magic_append_seq_elem(module: BModule; node: PNode) =
+  # proc incrSeqV3(s: PGenericSeq, typ: PNimType): PGenericSeq {.compilerProc.}
 
-proc gen_magic_append_seq_elem(module: BModule; node: PNode): ValueRef =
-  let sq = gen_expr(module, node[1]).val
-  let sq_type = skipTypes(node[1].typ, {tyVar})
-  let header = llvm.buildBitCast(module.ll_builder, sq, type_to_ptr get_generic_seq_type(module), "")
-  let type_info = gen_type_info(module, sq_type)
-  echo "sq ", sq
-  echo "sq ty ", llvm.typeOf(sq)
-  echo "h ", header
-  echo "h ty ", llvm.typeOf(header)
-  echo "t ", type_info
+  let seq = gen_expr_lvalue(module, node[1])
+  let val = gen_expr(module, node[2])
+
+  assert_value_type(seq.val, PointerTypeKind, PointerTypeKind)
+
+  let seq_val = llvm.buildLoad(module.ll_builder, seq.val, "seq_val")
+
+  let seq_type = skipTypes(node[1].typ, {tyVar})
+  let header = build_cast_generic_seq(module, seq_val)
+  let type_info = gen_type_info(module, seq_type)
   let call = gen_call_runtime_proc(module, "incrSeqV3", @[header, type_info])
-  #debug node
-  #assert false
+  let new_seq = BValue(
+    val:     llvm.buildBitCast(module.ll_builder, call, get_type(module, seq_type), "seq"),
+    storage: OnHeap)
 
-proc gen_magic_new_seq(module: BModule; node: PNode): ValueRef =
-  # todo
-  let seq = gen_expr(module, node[1]).val
-  let len = gen_expr(module, node[2]).val
-  build_new_seq(module, seq, len, node[1].typ)
+  # seq = incrSeqV3(seq, ...)
+  build_ref_assign(module, seq, new_seq)
 
-proc gen_magic_new_seq_of_cap(module: BModule; node: PNode): ValueRef =
+  # [1, 2, 3] len 3
+  # seq.len = seq.len + 1
+  let len_adr = build_nim_seq_len_not_nil_lvalue(module, new_seq.val)
+  let len_val = llvm.buildLoad(module.ll_builder, len_adr, "seq.len")
+  let new_len = llvm.buildAdd(module.ll_builder, len_val, constant_int(module, 1), "")
+  discard llvm.buildStore(module.ll_builder, new_len, len_adr)
+  # [1, 2, 3, _] len 4
+
+  # seq[3] = 4
+  let last_elem = BValue(
+    val:     build_seq_index(module, new_seq.val, len_val),
+    storage: seq.storage)
+  build_assign(module, last_elem, val, elemType(seq_type), copy = true)
+
+proc gen_magic_new_seq(module: BModule; node: PNode) =
+  let seq = gen_expr_lvalue(module, node[1])
+  let len = gen_expr(module, node[2])
+  build_new_seq(module, seq, node[1].typ, len.val)
+
+proc gen_magic_new_seq_of_cap(module: BModule; node: PNode): BValue =
   # todo
   let cap = gen_expr(module, node[1]).val
   let type_info = gen_type_info(module, node.typ)
-  result = gen_call_runtime_proc(module, "nimNewSeqOfCap", @[type_info, cap])
+  result.val = gen_call_runtime_proc(module, "nimNewSeqOfCap", @[type_info, cap])
+  result.storage = OnHeap
 
 proc gen_magic_length_seq(module: BModule; node: PNode): ValueRef =
   let struct = gen_expr(module, node[1]).val
   result = build_nim_seq_len(module, struct)
+
+proc gen_magic_set_length_seq(module: BModule; node: PNode) =
+  # proc setLengthSeqV2(s: PGenericSeq, typ: PNimType, newLen: int): PGenericSeq
+  let seq_node = if node[1].kind in {nkAddr, nkHiddenAddr}: node[1][0] else: node[1]
+
+  let seq = gen_expr_lvalue(module, seq_node)
+  let len = gen_expr(module, node[2])
+
+  assert_value_type(seq.val, PointerTypeKind, PointerTypeKind)
+
+  let seq_val = llvm.buildLoad(module.ll_builder, seq.val, "seq_val")
+
+  let seq_type = skipTypes(node[1].typ, {tyVar})
+  let header = build_cast_generic_seq(module, seq_val)
+  let type_info = gen_type_info(module, skipTypes(seq_type, abstractInst))
+  let call = gen_call_runtime_proc(module, "setLengthSeqV2", @[header, type_info, len.val])
+  let new_seq = BValue(
+    val:     llvm.buildBitCast(module.ll_builder, call, get_type(module, seq_type), "seq"),
+    storage: OnHeap)
+
+  build_ref_assign(module, seq, new_seq)
 
 # Strings ----------------------------------------------------------------------
 
