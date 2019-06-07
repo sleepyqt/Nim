@@ -23,9 +23,11 @@ const spam_var = false
 const spam_types = false
 const spam_proc = false
 const spam_rtti = false
+const spam_expr = true
 
 # ------------------------------------------------------------------------------
 
+proc `$`(x: TypeRef): string
 proc get_type(module: BModule; typ: PType): TypeRef
 proc get_type_size(module: BModule; typ: PType): BiggestInt
 proc get_type_align(module: BModule; typ: PType): BiggestInt

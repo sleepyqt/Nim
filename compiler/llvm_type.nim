@@ -26,7 +26,7 @@ proc type_to_ptr(value: TypeRef): TypeRef =
 
 proc live_as_pointer(module: BModule; typ: PType): bool =
   # values of this type are newer loaded in registers
-  result = typ.kind in {tyObject, tyArray, tyTuple, tyOpenArray}
+  result = typ.kind in {tyObject, tyArray, tyUncheckedArray, tyTuple, tyOpenArray, tyVarargs}
   result = result or (typ.kind == tySet and get_type_size(module, typ) > 8)
 
 proc get_runtime_type(module: BModule; name: string): TypeRef =

@@ -1,5 +1,47 @@
 # included from "llvm_pass.nim"
 
+# ------------------------------------------------------------------------------
+
+# DSL experiment
+
+template LOAD(v: ValueRef): ValueRef =
+  mixin module
+  llvm.buildLoad(module.ll_builder, v, $instantiationInfo())
+
+template STORE(v: ValueRef; d: ValueRef) =
+  mixin module
+  discard llvm.buildStore(module.ll_builder, v, d)
+
+template ALLOCA(ty: TypeRef; name: string): ValueRef =
+  mixin module
+  build_entry_alloca(module, ty, name)
+
+template CAST(v: ValueRef; ty: TypeRef): ValueRef =
+  mixin module
+  llvm.buildBitCast(module.ll_builder, v, ty, "")
+
+template ADDI(x, y: ValueRef): ValueRef =
+  mixin module
+  llvm.buildAdd(module.ll_builder, x, y, "")
+
+template SUBI(x, y: ValueRef): ValueRef =
+  mixin module
+  llvm.buildSub(module.ll_builder, x, y, "")
+
+template TRUNC(v: ValueRef; ty: TypeRef): ValueRef =
+  mixin module
+  llvm.buildTrunc(module.ll_builder, v, ty, "")
+
+template SEXT(v: ValueRef; ty: TypeRef): ValueRef =
+  mixin module
+  llvm.buildSExt(module.ll_builder, v, ty, "")
+
+template ZEXT(v: ValueRef; ty: TypeRef): ValueRef =
+  mixin module
+  llvm.buildZExt(module.ll_builder, v, ty, "")
+
+# ------------------------------------------------------------------------------
+
 proc file_info(module: BModule; node: PNode): string =
   let line = int node.info.line
   let col = int node.info.col
@@ -42,9 +84,23 @@ template assert_value_type(val: ValueRef; kind1, kind2: TypeKind) =
     let typ = llvm.typeOf(val)
     assert typ != nil
     let elem_type = llvm.getElementType(typ)
-    assert elem_type != nil
-    assert llvm.getTypeKind(typ) == kind1
-    assert llvm.getTypeKind(elem_type) == kind2
+    if (elem_type == nil) or (llvm.getTypeKind(typ) != kind1) or (llvm.getTypeKind(elem_type) != kind2):
+      echo "[!!!!] fail: ", kind1, " ", kind2
+      echo "[!!!!] fail: ", typ
+      echo "[!!!!] ", instantiationInfo()
+
+template assert_value_type(val: ValueRef; kind1, kind2, kind3: TypeKind) =
+  when true:
+    assert val != nil
+    let typ = llvm.typeOf(val)
+    assert typ != nil
+    let elem_type = llvm.getElementType(typ)
+    if (elem_type == nil) or (llvm.getTypeKind(typ) != kind1) or (llvm.getTypeKind(elem_type) != kind2):
+      let elem_type2 = llvm.getElementType(elem_type)
+      if llvm.getTypeKind(elem_type2) != kind3:
+        echo "[!!!!] fail: ", kind1, " ", kind2, " ", kind3
+        echo "[!!!!] fail: ", typ
+        echo "[!!!!] ", instantiationInfo()
 
 # ------------------------------------------------------------------------------
 
@@ -133,7 +189,7 @@ proc build_generic_cmp(module: BModule; pred: string; lhs, rhs: ValueRef; typ: P
 proc build_i8_to_i1(module: BModule; value: ValueRef): ValueRef =
   assert value != nil
   if llvm.getValueKind(value) == InstructionValueKind:
-    # eleminate common zext trunc combo
+    # eliminate common zext trunc combo
     if llvm.getInstructionOpcode(value) == llvm.ZExt:
       result = llvm.getOperand(value, 0)
       if llvm.getFirstUse(value) == nil:
@@ -147,8 +203,10 @@ proc build_i1_to_i8(module: BModule; value: ValueRef): ValueRef =
 # ------------------------------------------------------------------------------
 
 proc build_field_ptr(module: BModule; struct, index: ValueRef; hint = "struct.index"): ValueRef =
-  assert_value_type(struct, PointerTypeKind)
-  var indices = [constant(module, 0i32), index]
+  assert struct != nil
+  assert index != nil
+  assert_value_type(struct, PointerTypeKind, StructTypeKind)
+  var indices = [constant(module, 0i32), TRUNC(index, module.ll_int32)]
   result = llvm.buildGEP(module.ll_builder, struct, addr indices[0], 2, hint)
 
 proc build_mtype_field_ptr(module: BModule; struct: ValueRef; typ: PType): ValueRef =
@@ -198,8 +256,54 @@ proc build_open_array(module: BModule; ptr_T: PType; data_ptr: ValueRef; length:
   discard llvm.buildStore(module.ll_builder, data_ptr, field0) # T* -> T*
   discard llvm.buildStore(module.ll_builder, length, field1) # i64 -> i64
 
+proc build_cast_ptr(module: BModule; value: ValueRef): ValueRef =
+  assert_value_type(value, PointerTypeKind)
+  result = llvm.buildBitCast(module.ll_builder, value, module.ll_pointer, "")
+
+proc build_cast_ptr_ptr(module: BModule; value: ValueRef): ValueRef =
+  assert_value_type(value, PointerTypeKind)
+  result = llvm.buildBitCast(module.ll_builder, value, type_to_ptr module.ll_pointer, "")
+
+template build_not_nil(module: BModule; value: ValueRef; code: typed) =
+  # if value != nil:
+  #   code
+  assert_value_type(value, PointerTypeKind)
+
+  #   br v then cont
+  # then:
+  #   code
+  #   br cont
+  # cont:
+
+  let entry_bb = llvm.getInsertBlock(module.ll_builder)
+  let fun = llvm.getBasicBlockParent(entry_bb)
+  let then_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.then")
+  let cont_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "nilcheck.cont")
+  llvm.moveBasicBlockAfter(then_bb, entry_bb)
+  llvm.moveBasicBlockAfter(cont_bb, then_bb)
+
+  # entry:
+  llvm.positionBuilderAtEnd(module.ll_builder, entry_bb)
+  let null = llvm.constNull(llvm.typeOf(value))
+  let cond = llvm.buildICmp(module.ll_builder, IntNE, value, null, "")
+  discard llvm.buildCondBr(module.ll_builder, cond, then_bb, cont_bb)
+
+  # then:
+  llvm.positionBuilderAtEnd(module.ll_builder, then_bb)
+
+  code
+
+  discard llvm.buildBr(module.ll_builder, cont_bb)
+
+  # cont:
+  llvm.positionBuilderAtEnd(module.ll_builder, cont_bb)
+
 template build_nil_check(module: BModule; value: ValueRef; code_then, code_else: typed): ValueRef =
-  # execute `code_then` if value is not nil
+  # result = if value != nil:
+  #   code_then
+  # else:
+  #   code_else
+
   assert_value_type(value, PointerTypeKind)
 
   let entry_bb = llvm.getInsertBlock(module.ll_builder)
@@ -383,7 +487,17 @@ proc build_field_access(module: BModule; object_type: PType; object_value: Value
     let bitcast = llvm.buildBitCast(module.ll_builder, result, brach_type, "branch_cast")
     result = llvm.buildGEP(module.ll_builder, bitcast, addr indices[0], cuint len indices, "")
 
-# Intrisics --------------------------------------------------------------------
+proc build_tuple_field_access(module: BModule; tuple_type: PType; tuple_value: ValueRef; field: PSym): ValueRef =
+  assert_value_type(tuple_value, PointerTypeKind, StructTypeKind)
+  for index, tuple_field in tuple_type.n.sons:
+    if tuple_field.kind == nkSym:
+      if tuple_field.sym.id == field.id:
+        let ll_index = constant(module, int32 index)
+        result = build_field_ptr(module, tuple_value, ll_index, "tuple.field")
+        break
+  assert_value_type(result, PointerTypeKind)
+
+# Intrinsics --------------------------------------------------------------------
 
 proc call_intrisic(module: BModule; name: string; typ: TypeRef; args: openarray[ValueRef]): ValueRef =
   var fn = llvm.getNamedFunction(module.ll_module, name)

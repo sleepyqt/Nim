@@ -7,7 +7,7 @@ type ArgClass = enum
   Ignore
   OpenArray
 
-type ArgFlag = enum
+type ArgFlag {.pure.} = enum
   ByVal, InReg, Sext, Zext, ExpandToWords
 
 type ArgInfo = object
@@ -49,7 +49,7 @@ method classify_argument_type(abi: GenericAbi; module: BModule; typ: PType): Arg
 
   of tyObject, tyTuple:
     result.class = Expand
-    result.flags.incl ExpandToWords
+    result.flags.incl ArgFlag.ExpandToWords
 
   of tyInt .. tyInt64, tyUint .. tyUInt64, tyFloat32, tyFloat64, tyFloat:
     result.class = Direct
@@ -59,7 +59,7 @@ method classify_argument_type(abi: GenericAbi; module: BModule; typ: PType): Arg
 
   of tyBool:
     result.class = Direct
-    result.flags.incl Zext
+    result.flags.incl ArgFlag.Zext
 
   of tyOpenArray, tyVarargs:
     result.class = OpenArray
@@ -81,7 +81,7 @@ method classify_return_type(abi: GenericAbi; module: BModule; typ: PType): ArgIn
 
   of tyBool:
     result.class = Direct
-    result.flags.incl Zext
+    result.flags.incl ArgFlag.Zext
 
   else:
     assert false
@@ -105,10 +105,10 @@ method classify_argument_type(abi: Amd64AbiSystemV; module: BModule; typ: PType)
     let size = get_type_size(module, typ)
     if size in 1 .. 16:
       result.class = Expand
-      result.flags.incl ExpandToWords
+      result.flags.incl ArgFlag.ExpandToWords
     else:
       result.class = Indirect
-      result.flags.incl ByVal
+      result.flags.incl ArgFlag.ByVal
 
   of tyInt .. tyInt64, tyUint .. tyUInt64:
     result.class = Direct
@@ -127,7 +127,7 @@ method classify_argument_type(abi: Amd64AbiSystemV; module: BModule; typ: PType)
 
   of tyBool:
     result.class = Direct
-    result.flags.incl Zext
+    result.flags.incl ArgFlag.Zext
 
   of tyOpenArray, tyVarargs:
     result.class = OpenArray
@@ -178,7 +178,7 @@ method classify_return_type(abi: Amd64AbiSystemV; module: BModule; typ: PType): 
 
   of tyBool:
     result.class = Direct
-    result.flags.incl Zext
+    result.flags.incl ArgFlag.Zext
 
   of tyOpenArray, tyVarargs:
     result.class = OpenArray
@@ -209,7 +209,7 @@ method classify_argument_type(abi: Amd64AbiWindows; module: BModule; typ: PType)
     let size = get_type_size(module, typ)
     if size.int in [1, 2, 4, 8]:
       result.class = ArgClass.Expand
-      result.flags.incl(ExpandToWords)
+      result.flags.incl(ArgFlag.ExpandToWords)
     else:
       result.class = ArgClass.Indirect
 
@@ -331,7 +331,7 @@ method classify_argument_type(abi: X86Abi; module: BModule; typ: PType): ArgInfo
 
   of tyBool:
     result.class = Direct
-    result.flags.incl Zext
+    result.flags.incl ArgFlag.Zext
 
   of tyProc:
     result.class = Direct
@@ -375,7 +375,7 @@ method classify_return_type(abi: X86Abi; module: BModule; typ: PType): ArgInfo =
 
   of tyBool:
     result.class = Direct
-    result.flags.incl Zext
+    result.flags.incl ArgFlag.Zext
 
   of tyProc:
     result.class = Direct

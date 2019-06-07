@@ -1,5 +1,31 @@
 # included from "llvm_pass.nim"
 
+#[
+
+L Value:
+  int            → i64*
+  float32        → float*
+  object         → {}*
+  tuple          → {}*
+  array          → []*
+  string         → %NimStringDesc**
+  cstring        → i8**
+  UncheckedArray → []*
+  openArray      → {T*, i64}*
+
+R Value:
+  int            → i64
+  float32        → float
+  object         → {}*
+  tuple          → {}*
+  array          → []*
+  string         → %NimStringDesc*
+  cstring        → i8*
+  UncheckedArray → []*
+  openArray      → {T*, i64}*
+
+]#
+
 proc gen_copy(module: BModule; dst, val: ValueRef; typ: PType) =
   assert dst != nil
   assert val != nil
@@ -189,21 +215,42 @@ proc build_assign(module: BModule; dst, src: BValue; typ: PType; copy: bool = fa
     if (dst.storage == OnStack and config.selectedGC != gcGo) or usesWriteBarrier(config) == false:
       gen_copy(module, dst.val, src.val, typ)
     elif dst.storage == OnHeap:
-      let dst_cast = llvm.buildBitCast(module.ll_builder, dst.val, type_to_ptr module.ll_pointer, "assign.dst")
-      let src_cast = llvm.buildBitCast(module.ll_builder, src.val, module.ll_pointer, "assign.src")
+      let dst_cast = build_cast_ptr_ptr(module, dst.val)
+      let src_cast = build_cast_ptr(module, src.val)
       discard gen_call_runtime_proc(module, "asgnRef", @[dst_cast, src_cast])
     else:
-      let dst_cast = llvm.buildBitCast(module.ll_builder, dst.val, type_to_ptr module.ll_pointer, "assign.dst")
-      let src_cast = llvm.buildBitCast(module.ll_builder, src.val, module.ll_pointer, "assign.src")
+      let dst_cast = build_cast_ptr_ptr(module, dst.val)
+      let src_cast = build_cast_ptr(module, src.val)
       discard gen_call_runtime_proc(module, "unsureAsgnRef", @[dst_cast, src_cast])
   of tyString:
     if config.selectedGC == gcDestructors:
       discard "genGenericAsgn"
     elif (copy == false and src.storage != OnStatic) or can_move(module, src, dst):
-      discard "genRefAssign"
+      build_ref_assign(module, dst, src)
     else:
-      discard
-    gen_copy(module, dst.val, src.val, typ)
+      if (dst.storage == OnStack and config.selectedGC != gcGo) or usesWriteBarrier(config) == false:
+        let call = gen_call_runtime_proc(module, "copyString", @[src.val])
+        STORE call, dst.val
+      elif dst.storage == OnHeap:
+        let tmp = ALLOCA(get_nim_string_type(module), "str.copy.tmp")
+        # tmp = load dst
+        STORE LOAD(dst.val), tmp
+        # copyStringRC1(src)
+        let call = gen_call_runtime_proc(module, "copyStringRC1", @[src.val])
+        # dst = copyStringRC1(src)
+        STORE call, dst.val
+        # if tmp != nil
+        build_not_nil(module, LOAD tmp):
+          # nimGCunrefNoCycle(tmp)
+          let tmp_cast = build_cast_ptr(module, tmp)
+          discard gen_call_runtime_proc(module, "nimGCunrefNoCycle", @[tmp_cast])
+      else:
+        let dst_cast = build_cast_ptr_ptr(module, dst.val)
+        # let t = copyString(src)
+        let str_copy = gen_call_runtime_proc(module, "copyString", @[src.val])
+        let src_cast = build_cast_ptr(module, str_copy)
+        # unsureAsgnRef(dst, t)
+        discard gen_call_runtime_proc(module, "unsureAsgnRef", @[dst_cast, src_cast])
   of tySequence:
     echo "~~ build_assign:"
     echo "~~   dst: ", dst
@@ -215,8 +262,8 @@ proc build_assign(module: BModule; dst, src: BValue; typ: PType; copy: bool = fa
     elif (copy == false and src.storage != OnStatic) or can_move(module, src, dst):
       build_ref_assign(module, dst, src)
     else:
-      let dst_cast = llvm.buildBitCast(module.ll_builder, dst.val, type_to_ptr module.ll_pointer, "assign.seq.dst")
-      let src_cast = llvm.buildBitCast(module.ll_builder, src.val, module.ll_pointer, "assign.seq.src")
+      let dst_cast = build_cast_ptr_ptr(module, dst.val)
+      let src_cast = build_cast_ptr(module, src.val)
       discard gen_call_runtime_proc(module, "genericSeqAssign", @[dst_cast, src_cast, gen_type_info(module, typ)])
   else:
     gen_copy(module, dst.val, src.val, typ)
@@ -330,23 +377,31 @@ proc gen_object_constr(module: BModule; node: PNode): BValue =
     (alloca, node.typ)
 
   result.val = dest
+  result.storage = OnStack
 
   for i in 1 ..< node.len:
     let field = node[i]
-    let lhs = build_field_access(module, obj_type, dest, field[0].sym)
-    let rhs = gen_expr(module, field[1]).val
-    gen_copy(module, lhs, rhs, field[0].typ)
+    let lhs = BValue(
+      val:     build_field_access(module, obj_type, dest, field[0].sym),
+      storage: OnStack)
+    let rhs = gen_expr(module, field[1])
+    #gen_copy(module, lhs, rhs, field[0].typ)
+    build_assign(module, lhs, rhs, field[0].typ, copy = true)
 
 proc gen_tuple_constr(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
   let alloca = build_entry_alloca(module, ll_type, "tuple.constr")
   result.val = alloca
+  result.storage = OnStack
   for i in 0 ..< node.len:
     let field = node[i]
     let index = constant(module, int32(i))
-    let lhs = build_field_ptr(module, alloca, index, "tuple.index")
-    let rhs = gen_expr(module, field).val
-    gen_copy(module, lhs, rhs, field.typ)
+    let lhs = BValue(
+      val:     build_field_ptr(module, alloca, index, "tuple.index"),
+      storage: OnStack)
+    let rhs = gen_expr(module, field)
+    #gen_copy(module, lhs, rhs, field.typ)
+    build_assign(module, lhs, rhs, field.typ, copy = true)
 
 proc gen_bracket_lvalue(module: BModule; node: PNode): BValue =
   let ll_type = get_type(module, node.typ)
@@ -434,8 +489,14 @@ proc gen_str_lit(module: BModule; node: PNode): BValue =
     result = build_cstring_lit(module, node.strVal)
   elif node.typ.kind == tyString:
     let header_type = get_generic_seq_type(module)
-    # todo: flags in cap field
-    var header_values = [ constant_int(module, node.strVal.len), constant_int(module, node.strVal.len) ]
+    let int_size = int64(module.module_list.config.target.intSize)
+    let mask     = 1i64 shl (int_size - 2i64)
+    let length   = int64(node.strVal.len)
+    let capacity = int64(length or mask)
+    var header_values = [
+      constant_int(module, length),  # length
+      constant_int(module, capacity) # capacity | flags
+    ]
     let header = llvm.constStructInContext(module.ll_context, addr header_values[0], 2, Bool 0)
 
     let str = llvm.constStringInContext(module.ll_context, node.strVal, cuint len node.strVal, Bool 0)
@@ -448,8 +509,9 @@ proc gen_str_lit(module: BModule; node: PNode): BValue =
     llvm.setLinkage(global, PrivateLinkage)
 
     result.val = llvm.buildBitCast(module.ll_builder, global, get_nim_string_type(module), "")
+    result.storage = OnStatic
   else:
-    assert false
+    assert false, $node.typ.kind
 
 # ------------------------------------------------------------------------------
 
@@ -531,7 +593,7 @@ proc gen_magic_length(module: BModule; node: PNode): ValueRef =
     assert_value_type(len_field, PointerTypeKind)
     result = llvm.buildLoad(module.ll_builder, len_field, "magic.openarray.len")
     assert_value_type(result, IntegerTypeKind)
-  of tySequence:
+  of tySequence, tyString:
     let seq = gen_expr(module, sym_node).val
     result = build_nim_seq_len(module, seq)
   else:
@@ -894,7 +956,9 @@ proc gen_sym_const(module: BModule; sym: PSym): BValue =
   assert result.val != nil, (block: (debug(sym); "nil"))
 
 proc gen_sym_expr_lvalue(module: BModule; node: PNode): BValue =
-  #echo "gen_sym_expr_lvalue kind: ", node.sym.kind
+
+  when spam_expr:
+    echo "gen_sym_expr_lvalue kind: ", node.sym.kind, " ", file_info(module, node)
 
   case node.sym.kind:
   of skVar, skForVar, skLet, skResult, skTemp:
@@ -915,7 +979,6 @@ proc gen_sym_expr_lvalue(module: BModule; node: PNode): BValue =
   assert_value_type(result.val, PointerTypeKind)
 
 proc gen_sym_expr(module: BModule; node: PNode): BValue =
-  #echo "gen_sym_expr kind: ", node.kind, " sym.kind: ", node.sym.kind
 
   case node.sym.kind:
   of skProc, skConverter, skIterator, skFunc:
@@ -925,15 +988,19 @@ proc gen_sym_expr(module: BModule; node: PNode): BValue =
     result = gen_sym_const(module, node.sym)
   of skVar, skForVar, skResult, skLet, skParam, skTemp:
     let alloca = gen_sym_expr_lvalue(module, node)
-    if live_as_pointer(module, node.sym.typ):
+    echo "☭ :: ", node.sym.typ.kind
+    if live_as_pointer(module, skipTypes(node.sym.typ, abstractInst)):
       result = alloca
     else:
-      result.val = llvm.buildLoad(module.ll_builder, alloca.val, "var." & node.sym.name.s)
+      result.val = LOAD alloca.val
       result.storage = alloca.storage
   of skType:
     result.val = gen_type_info(module, node.sym.typ)
   else:
     assert false, $node.sym.kind & file_info(module, node)
+
+  when spam_expr:
+    echo "gen_sym_expr kind: ", node.kind, " sym.kind: ", node.sym.kind, " → ", result
 
   assert result.val != nil
 
@@ -945,62 +1012,64 @@ proc gen_dot_expr_lvalue(module: BModule; node: PNode): BValue =
   let field = node[1].sym
   let object_type = skipTypes(node[0].typ, abstractInst)
 
-  if object_type.kind == tyObject:
+  case object_type.kind:
+  of tyObject:
+    assert_value_type(lhs.val, PointerTypeKind, StructTypeKind)
     result.val = build_field_access(module, object_type, lhs.val, field)
     result.storage = lhs.storage
-  elif object_type.kind == tyTuple:
-    for index, tuple_field in object_type.n.sons:
-      if tuple_field.kind == nkSym:
-        if tuple_field.sym.id == field.id:
-          let ll_index = constant(module, int32 index)
-          result.val = build_field_ptr(module, lhs.val, ll_index, "tuple.field")
-          result.storage = lhs.storage
-          break
+  of tyTuple:
+    assert_value_type(lhs.val, PointerTypeKind, StructTypeKind)
+    result.val = build_tuple_field_access(module, object_type, lhs.val, field)
+    result.storage = lhs.storage
   else:
     assert false, $(object_type.kind)
 
-  assert result.val != nil
+  assert_value_type(result.val, PointerTypeKind)
 
 proc gen_dot_expr(module: BModule; node: PNode): BValue =
-  let adr = gen_dot_expr_lvalue(module, node)
-  assert_value_type(adr.val, PointerTypeKind)
+  let lhs = gen_expr(module, node[0])
 
-  if live_as_pointer(module, node[1].typ):
-    result = adr
+  let field = node[1].sym
+  let object_type = skipTypes(node[0].typ, abstractInst)
+
+  case object_type.kind:
+  of tyObject:
+    assert_value_type(lhs.val, PointerTypeKind, StructTypeKind)
+    result.val = build_field_access(module, object_type, lhs.val, field)
+    result.storage = lhs.storage
+  of tyTuple:
+    assert_value_type(lhs.val, PointerTypeKind, StructTypeKind)
+    result.val = build_tuple_field_access(module, object_type, lhs.val, field)
+    result.storage = lhs.storage
   else:
-    result.val = llvm.buildLoad(module.ll_builder, adr.val, "gen_dot_expr.deref")
-    result.storage = adr.storage
+    assert false, $(object_type.kind)
 
-  assert result.val != nil
+  assert_value_type(lhs.val, PointerTypeKind, StructTypeKind)
 
-proc gen_checked_field_lvalue(module: BModule; node: PNode): BValue =
+  if not live_as_pointer(module, skipTypes(node.typ, abstractInst)):
+    result.val = LOAD result.val
+
+proc gen_checked_field_expr_lvalue(module: BModule; node: PNode): BValue =
   # todo: field checks
   result = gen_dot_expr_lvalue(module, node[0])
 
-  #assert result != nil
-
 proc gen_checked_field_expr(module: BModule; node: PNode): BValue =
-  let adr = gen_checked_field_lvalue(module, node).val
-  result.val = llvm.buildLoad(module.ll_builder, adr, "gen_checked_field_expr.deref")
-
-  assert result.val != nil
+  result = gen_dot_expr(module, node[0])
 
 # ------------------------------------------------------------------------------
 
 proc gen_bracket_expr_lvalue(module: BModule; node: PNode): BValue =
   let lhs = gen_expr_lvalue(module, node[0])
   let rhs = gen_expr(module, node[1])
-  assert lhs.val != nil
-  assert rhs.val != nil
+
   case skipTypes(node[0].typ, abstractInst).kind:
-  of tyArray:
+  of tyArray, tyUncheckedArray:
+    assert_value_type(lhs.val, PointerTypeKind, ArrayTypeKind)
     var indices = [constant_int(module, 0), rhs.val]
     result.val = llvm.buildGEP(module.ll_builder, lhs.val, addr indices[0], cuint len indices, "array.index")
     result.storage = lhs.storage
-  of tyUncheckedArray:
-    var indices = [constant_int(module, 0), rhs.val]
-    result.val = llvm.buildGEP(module.ll_builder, lhs.val, addr indices[0], cuint len indices, "uncheckedarray.index")
   of tyOpenArray, tyVarargs:
+    assert_value_type(lhs.val, PointerTypeKind, StructTypeKind)
     let adr_field_data = build_field_ptr(module, lhs.val, constant(module, 0i32), "openarray.data")
     let adr_field_lengt = build_field_ptr(module, lhs.val, constant(module, 1i32), "openarray.length")
     let data_ptr = llvm.buildLoad(module.ll_builder, adr_field_data, "openarray.deref")
@@ -1008,59 +1077,110 @@ proc gen_bracket_expr_lvalue(module: BModule; node: PNode): BValue =
     result.val = llvm.buildGEP(module.ll_builder, data_ptr, addr indices[0], cuint len indices, "openarray.index")
     result.storage = lhs.storage
   of tyCString:
-    let adr = llvm.buildLoad(module.ll_builder, lhs.val, "cstring.deref")
+    assert_value_type(lhs.val, PointerTypeKind, PointerTypeKind, IntegerTypeKind)
+    let adr = LOAD lhs.val
     var indices = [rhs.val]
     result.val = llvm.buildGEP(module.ll_builder, adr, addr indices[0], cuint len indices, "cstring.index")
     result.storage = lhs.storage
-  of tyString:
-    # {{i64, i64}, [i8 x 0]}**
-    let struct = llvm.buildLoad(module.ll_builder, lhs.val, "")
-    result.val = build_seq_index(module, struct, rhs.val)
-    result.storage = lhs.storage
-    # i8*
-  of tySequence:
+  of tyString, tySequence:
+    assert_value_type(lhs.val, PointerTypeKind, PointerTypeKind, StructTypeKind)
     let struct = llvm.buildLoad(module.ll_builder, lhs.val, "")
     result.val = build_seq_index(module, struct, rhs.val)
     result.storage = lhs.storage
   of tyTuple:
-    # {i64, i64, i64}**
-    let struct = llvm.buildLoad(module.ll_builder, lhs.val, "")
-    # {i64, i64, i64}*
-    result.val = build_field_ptr(module, struct, rhs.val, "tuple.[]")
+    assert_value_type(lhs.val, PointerTypeKind, StructTypeKind)
+    result.val = build_field_ptr(module, lhs.val, rhs.val, "tuple.[]")
     result.storage = lhs.storage
   else:
     assert false, $(node[0].typ.kind)
 
 proc gen_bracket_expr(module: BModule; node: PNode): BValue =
-  let adr = gen_bracket_expr_lvalue(module, node)
-  result.val = llvm.buildLoad(module.ll_builder, adr.val, "gen_bracket_expr.deref")
-  result.storage = adr.storage
+  let lhs = gen_expr(module, node[0])
+  let rhs = gen_expr(module, node[1])
+
+  case skipTypes(node[0].typ, abstractInst).kind:
+  of tyArray, tyUncheckedArray:
+    assert_value_type(lhs.val, PointerTypeKind, ArrayTypeKind)
+    var indices = [constant_int(module, 0), rhs.val]
+    result.val = llvm.buildGEP(module.ll_builder, lhs.val, addr indices[0], cuint len indices, "array.index")
+    result.storage = lhs.storage
+  of tyOpenArray, tyVarargs:
+    assert_value_type(lhs.val, PointerTypeKind, StructTypeKind)
+    let adr_field_data = build_field_ptr(module, lhs.val, constant(module, 0i32), "openarray.data")
+    let adr_field_lengt = build_field_ptr(module, lhs.val, constant(module, 1i32), "openarray.length")
+    let data_ptr = llvm.buildLoad(module.ll_builder, adr_field_data, "openarray.deref")
+    var indices = [rhs.val]
+    result.val = llvm.buildGEP(module.ll_builder, data_ptr, addr indices[0], cuint len indices, "openarray.index")
+    result.storage = lhs.storage
+  of tyCString:
+    assert_value_type(lhs.val, PointerTypeKind, IntegerTypeKind)
+    var indices = [rhs.val]
+    result.val = llvm.buildGEP(module.ll_builder, lhs.val, addr indices[0], cuint len indices, "cstring.index")
+    result.storage = lhs.storage
+  of tyString, tySequence:
+    assert_value_type(lhs.val, PointerTypeKind, StructTypeKind)
+    result.val = build_seq_index(module, lhs.val, rhs.val)
+    result.storage = lhs.storage
+  of tyTuple:
+    assert_value_type(lhs.val, PointerTypeKind, StructTypeKind)
+    result.val = build_field_ptr(module, lhs.val, rhs.val, "tuple.[]")
+    result.storage = lhs.storage
+  else:
+    assert false, $(node[0].typ.kind)
+
+  if not live_as_pointer(module, skipTypes(node.typ, abstractInst)):
+    result.val = LOAD result.val
 
 # ------------------------------------------------------------------------------
 
 proc gen_deref_expr_lvalue(module: BModule; node: PNode): BValue =
   # **value -> *value
-  let adr = gen_expr_lvalue(module, node[0])
-  # usrToCell(p).refcount
-  # usrToCell(p)[].refcount ignore
+  let val = gen_expr_lvalue(module, node[0])
+
   let dst_type = skipTypes(node.typ, abstractInst)
-  if node[0].kind == nkCall and live_as_pointer(module, dst_type) and node.kind == nkHiddenDeref:
-    result = adr
+  let val_type = skipTypes(node[0].typ, abstractInst)
+
+  let deref1 = not live_as_pointer(module, dst_type)
+  let deref2 = val_type.kind in {tyPtr, tyVar, tyRef}
+  let deref  = deref1 or deref2
+
+  echo "L val    : ", val
+  echo "L deref  : ", deref
+  echo "L deref1 : ", deref1
+  echo "L deref2 : ", deref2
+  echo "L var    : ", (val_type.kind == tyVar)
+  echo "L dst ty : ", dst_type.kind
+  echo "L val ty : ", val_type.kind, " :: ", llvm.typeOf(val.val)
+
+  if deref:
+    result.val = LOAD val.val
   else:
-    result.val = llvm.buildLoad(module.ll_builder, adr.val, "deref.lvalue")
+    result = val
+
+  echo "L result : ", result, " :: ", llvm.typeOf(result.val)
 
 proc gen_deref_expr(module: BModule; node: PNode): BValue =
   # *value -> value
-  let adr = gen_expr(module, node[0]).val
+  let val = gen_expr(module, node[0])
+
   let dst_type = skipTypes(node.typ, abstractInst)
   let val_type = skipTypes(node[0].typ, abstractInst)
-  if val_type.kind == tyVar and live_as_pointer(module, dst_type) and node.kind == nkHiddenDeref:
-    # proc p1(p: Foo)
-    # proc p2(p: var Foo) = p1(p)
-    #                          p[] # ← ignore hidden deref here
-    result.val = adr
+
+  let deref = (not live_as_pointer(module, dst_type))
+
+  echo "R val    : ", val
+  echo "R deref  : ", deref
+  echo "R live   : ", live_as_pointer(module, dst_type)
+  echo "R var    : ", (val_type.kind == tyVar)
+  echo "R dst ty : ", dst_type.kind
+  echo "R val ty : ", val_type.kind, " :: ", llvm.typeOf(val.val)
+
+  if deref:
+    result.val = LOAD val.val
   else:
-    result.val = llvm.buildLoad(module.ll_builder, adr, "deref.rvalue")
+    result = val
+
+  echo "R result : ", result, " :: ", llvm.typeOf(result.val)
 
 proc gen_addr(module: BModule; node: PNode): BValue =
   # addr foo
@@ -1177,7 +1297,7 @@ proc gen_cast_expr(module: BModule; node: PNode): BValue =
 
 proc gen_expr_lvalue(module: BModule; node: PNode): BValue =
   # L value, always pointer
-  #echo "gen_expr_lvalue kind: ", node.kind, " ", file_info(module, node)
+
   case node.kind:
   of nkSym:
     result = gen_sym_expr_lvalue(module, node)
@@ -1186,7 +1306,7 @@ proc gen_expr_lvalue(module: BModule; node: PNode): BValue =
     result = gen_dot_expr_lvalue(module, node)
     assert_value_type(result.val, PointerTypeKind)
   of nkCheckedFieldExpr:
-    result = gen_checked_field_lvalue(module, node)
+    result = gen_checked_field_expr_lvalue(module, node)
     assert_value_type(result.val, PointerTypeKind)
   of nkBracketExpr:
     result = gen_bracket_expr_lvalue(module, node)
@@ -1205,6 +1325,9 @@ proc gen_expr_lvalue(module: BModule; node: PNode): BValue =
     assert_value_type(result.val, PointerTypeKind)
   else: echo "gen_expr_lvalue: unknown node kind: ", node.kind, " ", file_info(module, node)
 
+  when spam_expr:
+    echo "gen_expr_lvalue kind: ", node.kind, " ", file_info(module, node), " → ", result
+
   if llvm.getTypeKind(llvm.typeOf(result.val)) != PointerTypeKind:
     echo "! ", file_info(module, node)
     echo llvm.getBasicBlockParent(llvm.getInsertBlock(module.ll_builder))
@@ -1213,7 +1336,7 @@ proc gen_expr_lvalue(module: BModule; node: PNode): BValue =
 
 proc gen_expr(module: BModule; node: PNode): BValue =
   # R value, can be pointer or value
-  #echo "gen_expr kind: ", node.kind, " ", file_info(module, node)
+
   case node.kind:
   of nkSym:
     result = gen_sym_expr(module, node)
@@ -1334,6 +1457,9 @@ proc gen_expr(module: BModule; node: PNode): BValue =
   of nkCStringToString:
     result = gen_cstring_to_string(module, node)
   else: echo "gen_expr: unknown node kind: ", node.kind
+
+  when spam_expr:
+    echo "gen_expr kind: ", node.kind, " ", file_info(module, node), " → ", result
 
 # ------------------------------------------------------------------------------
 
