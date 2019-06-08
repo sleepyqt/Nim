@@ -173,8 +173,6 @@ proc gen_magic_in_set(module: BModule; node: PNode): ValueRef =
   assert node[1] != nil
   assert node[2] != nil
 
-  #echo "ll_val_type = ", ll_val_type
-
   if set_size <= 8:
     # result = if (set_value and (1 shl value)) != 0
     let set_value = gen_expr(module, node[1]).val

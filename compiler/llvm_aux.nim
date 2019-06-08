@@ -4,41 +4,97 @@
 
 # DSL experiment
 
-template LOAD(v: ValueRef): ValueRef =
+template BLoad(v: ValueRef): ValueRef =
   mixin module
-  llvm.buildLoad(module.ll_builder, v, $instantiationInfo())
+  llvm.buildLoad(module.ll_builder, v, "")
 
-template STORE(v: ValueRef; d: ValueRef) =
+template BStore(v: ValueRef; d: ValueRef) =
   mixin module
   discard llvm.buildStore(module.ll_builder, v, d)
 
-template ALLOCA(ty: TypeRef; name: string): ValueRef =
+template BAlloca(ty: TypeRef; name: string): ValueRef =
   mixin module
   build_entry_alloca(module, ty, name)
 
-template CAST(v: ValueRef; ty: TypeRef): ValueRef =
+template BBitCast(v: ValueRef; ty: TypeRef): ValueRef =
   mixin module
   llvm.buildBitCast(module.ll_builder, v, ty, "")
 
-template ADDI(x, y: ValueRef): ValueRef =
+template BAddI(x, y: ValueRef): ValueRef =
   mixin module
   llvm.buildAdd(module.ll_builder, x, y, "")
 
-template SUBI(x, y: ValueRef): ValueRef =
+template BSubI(x, y: ValueRef): ValueRef =
   mixin module
   llvm.buildSub(module.ll_builder, x, y, "")
 
-template TRUNC(v: ValueRef; ty: TypeRef): ValueRef =
+template BLShr(x, y: ValueRef): ValueRef =
+  mixin module
+  llvm.buildLShr(module.ll_builder, x, y, "")
+
+template BAShr(x, y: ValueRef): ValueRef =
+  mixin module
+  llvm.buildAShr(module.ll_builder, x, y, "")
+
+template BShl(x, y: ValueRef): ValueRef =
+  mixin module
+  llvm.buildShl(module.ll_builder, x, y, "")
+
+template BOr(x, y: ValueRef): ValueRef =
+  mixin module
+  llvm.buildOr(module.ll_builder, x, y, "")
+
+template BAnd(x, y: ValueRef): ValueRef =
+  mixin module
+  llvm.buildAnd(module.ll_builder, x, y, "")
+
+template BXor(x, y: ValueRef): ValueRef =
+  mixin module
+  llvm.buildXor(module.ll_builder, x, y, "")
+
+template BTrunc(v: ValueRef; ty: TypeRef): ValueRef =
   mixin module
   llvm.buildTrunc(module.ll_builder, v, ty, "")
 
-template SEXT(v: ValueRef; ty: TypeRef): ValueRef =
+template BSext(v: ValueRef; ty: TypeRef): ValueRef =
   mixin module
   llvm.buildSExt(module.ll_builder, v, ty, "")
 
-template ZEXT(v: ValueRef; ty: TypeRef): ValueRef =
+template BZext(v: ValueRef; ty: TypeRef): ValueRef =
   mixin module
   llvm.buildZExt(module.ll_builder, v, ty, "")
+
+template BGep(v: ValueRef; indices: typed): ValueRef =
+  mixin module
+  var ind = indices
+  llvm.buildGEP(module.ll_builder, v, addr ind[0], cuint len ind, "")
+
+template BICmp(pred: IntPredicate; x, y: ValueRef): ValueRef =
+  mixin module
+  llvm.buildICmp(module.ll_builder, pred, x, y, "")
+
+template CI8(v: int8): ValueRef =
+  mixin module
+  llvm.constInt(module.ll_int8, culonglong v, Bool 1)
+
+template CI16(v: int16): ValueRef =
+  mixin module
+  llvm.constInt(module.ll_int16, culonglong v, Bool 1)
+
+template CI32(v: int32): ValueRef =
+  mixin module
+  llvm.constInt(module.ll_int32, culonglong v, Bool 1)
+
+template CI64(v: int64): ValueRef =
+  mixin module
+  llvm.constInt(module.ll_int64, culonglong v, Bool 1)
+
+template CInt(v: int64): ValueRef =
+  mixin module
+  case module.module_list.config.target.intSize:
+  of 8: llvm.constInt(module.ll_int64, culonglong v, Bool 1)
+  of 4: llvm.constInt(module.ll_int32, culonglong v, Bool 1)
+  else: llvm.constInt(module.ll_int32, culonglong v, Bool 1)
 
 # ------------------------------------------------------------------------------
 
@@ -206,7 +262,7 @@ proc build_field_ptr(module: BModule; struct, index: ValueRef; hint = "struct.in
   assert struct != nil
   assert index != nil
   assert_value_type(struct, PointerTypeKind, StructTypeKind)
-  var indices = [constant(module, 0i32), TRUNC(index, module.ll_int32)]
+  var indices = [constant(module, 0i32), BTrunc(index, module.ll_int32)]
   result = llvm.buildGEP(module.ll_builder, struct, addr indices[0], 2, hint)
 
 proc build_mtype_field_ptr(module: BModule; struct: ValueRef; typ: PType): ValueRef =

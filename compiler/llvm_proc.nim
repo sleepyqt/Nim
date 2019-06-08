@@ -1,6 +1,6 @@
 # included from "llvm_pass.nim"
 
-proc gen_proc_prototype(module: BModule; sym: PSym): ValueRef =
+proc build_proc_prototype(module: BModule; sym: PSym): ValueRef =
   result = module.get_value(sym)
   if result == nil:
     let proc_type = get_proc_type(module, sym.typ)
@@ -20,7 +20,7 @@ proc gen_proc_prototype(module: BModule; sym: PSym): ValueRef =
       echo "♥♥ module           : ", module.module_sym.name.s, " id ", module.module_sym.id
       echo "♥♥ --------------------------------------------------"
 
-proc gen_proc_body(module: BModule; sym: PSym) =
+proc build_proc_body(module: BModule; sym: PSym) =
   assert sym != nil
   assert sym.kind in {skProc, skFunc}
   assert module.get_value(sym) != nil
@@ -245,19 +245,19 @@ proc gen_proc(module: BModule; sym: PSym): ValueRef =
   assert sfForward notin sym.flags
 
   if sfImportc in sym.flags:
-    result = gen_proc_prototype(module, sym)
+    result = build_proc_prototype(module, sym)
   else:
     let target = find_module(module, sym)
 
     # delay code generation for builtin compiler procs
     if sfCompilerProc in sym.flags:
-      discard gen_proc_prototype(target, sym)
+      discard build_proc_prototype(target, sym)
       target.delayed_procs.add(sym)
     else:
-      discard gen_proc_prototype(target, sym)
-      gen_proc_body(target, sym)
+      discard build_proc_prototype(target, sym)
+      build_proc_body(target, sym)
 
-    result = gen_proc_prototype(module, sym)
+    result = build_proc_prototype(module, sym)
 
 # ------------------------------------------------------------------------------
 
@@ -342,12 +342,12 @@ proc build_call(module: BModule; proc_type: PType; callee: ValueRef; arguments: 
     of ArgClass.Indirect:
       let ll_arg_type = get_proc_param_type(module, arg_type)
       let arg_copy    = build_entry_alloca(module, ll_arg_type, "arg_copy")
-      gen_copy(module, arg_copy, arg_value, arg_type)
+      build_bitwise_copy(module, arg_copy, arg_value, arg_type)
       ll_args.add arg_copy
     of ArgClass.Expand:
       let ll_arg_type = get_proc_param_type(module, arg_type)
       let arg_copy    = build_entry_alloca(module, ll_arg_type, "arg_copy")
-      gen_copy(module, arg_copy, arg_value, arg_type)
+      build_bitwise_copy(module, arg_copy, arg_value, arg_type)
       if ExpandToWords in arg_info.flags:
         # {i32, i32, i32, i32}
         # @foo(i64, i64)
@@ -434,7 +434,7 @@ proc gen_call_expr(module: BModule; node: PNode): ValueRef =
 
   for arg in node.sons[1 .. ^1]:
     let value = gen_expr(module, arg).val
-    assert value != nil, (block: (debug(arg); "nil"))
+    assert value != nil
     arguments.add(value)
     arguments_types.add(arg.typ)
 
@@ -442,11 +442,11 @@ proc gen_call_expr(module: BModule; node: PNode): ValueRef =
 
 # ------------------------------------------------------------------------------
 
-proc gen_call_runtime_proc(module: BModule; name: string; arguments: seq[ValueRef]): ValueRef =
+proc build_call_runtime(module: BModule; name: string; arguments: seq[ValueRef]): ValueRef =
   let compiler_proc = module.module_list.graph.getCompilerProc(name)
 
   if compiler_proc == nil:
-    module.ice("gen_call_runtime_proc: compilerProc missing: " & name)
+    module.ice("build_call_runtime: compilerProc missing: " & name)
 
   assert lfNoDecl notin compiler_proc.loc.flags
 
@@ -454,15 +454,15 @@ proc gen_call_runtime_proc(module: BModule; name: string; arguments: seq[ValueRe
   let proc_type = compiler_proc.typ
 
   let target = find_module(module, compiler_proc)
-  discard gen_proc_prototype(target, compiler_proc)
+  discard build_proc_prototype(target, compiler_proc)
   target.delayed_procs.add(compiler_proc)
-  let callee = gen_proc_prototype(module, compiler_proc)
+  let callee = build_proc_prototype(module, compiler_proc)
 
   assert arguments.len == arguments_types.len
 
   result = build_call(module, proc_type, callee, arguments, arguments_types)
 
-proc gen_call_runtime_proc(module: BModule; node: PNode): ValueRef =
+proc build_call_runtime(module: BModule; node: PNode): ValueRef =
   assert node.kind in nkCallKinds
 
   let proc_sym = node[namePos].sym
@@ -471,13 +471,13 @@ proc gen_call_runtime_proc(module: BModule; node: PNode): ValueRef =
     let compiler_proc = module.module_list.graph.getCompilerProc($proc_sym.loc.r)
 
     if compiler_proc == nil:
-      module.ice("gen_call_runtime_proc: compilerProc missing: " & $proc_sym.loc.r)
+      module.ice("build_call_runtime: compilerProc missing: " & $proc_sym.loc.r)
 
     # call to magic proc may produce broken code (globals used before declarations etc..)
     # so delay generation of their code
     let target = find_module(module, compiler_proc)
-    discard gen_proc_prototype(target, compiler_proc)
+    discard build_proc_prototype(target, compiler_proc)
     target.delayed_procs.add(compiler_proc)
-    result = gen_proc_prototype(module, compiler_proc)
+    result = build_proc_prototype(module, compiler_proc)
 
   result = gen_call_expr(module, node)

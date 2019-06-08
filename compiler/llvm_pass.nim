@@ -23,7 +23,9 @@ const spam_var = false
 const spam_types = false
 const spam_proc = false
 const spam_rtti = false
-const spam_expr = true
+const spam_expr = false
+const spam_deref = false
+const spam_asgn = false
 
 # ------------------------------------------------------------------------------
 
@@ -40,13 +42,13 @@ proc get_generic_seq_type(module: BModule): TypeRef
 proc gen_stmt(module: BModule; node: PNode)
 proc gen_expr(module: BModule; node: PNode): BValue
 proc gen_expr_lvalue(module: BModule; node: PNode): BValue
-proc gen_copy(module: BModule; dst, val: ValueRef; typ: PType)
+proc build_bitwise_copy(module: BModule; dst, val: ValueRef; typ: PType)
 proc gen_default_init(module: BModule; typ: PType; alloca: ValueRef)
 proc build_cstring_lit(module: BModule; text: string): BValue
 proc build_assign(module: BModule; dst, src: BValue; typ: PType; copy: bool = false)
 proc build_ref_assign(module: BModule; dst, src: BValue)
-proc build_new_obj(module: BModule; dest: BValue; typ: PType)
-proc build_new_seq(module: BModule; dest: BValue; typ: PType; length: ValueRef)
+proc build_new_obj(module: BModule; dst: BValue; typ: PType)
+proc build_new_seq(module: BModule; dst: BValue; typ: PType; length: ValueRef)
 proc convert_scalar(module: BModule; value: ValueRef; dst_type: TypeRef; signed: bool): ValueRef
 
 # ------------------------------------------------------------------------------
@@ -340,7 +342,6 @@ proc gen_main_module*(module: BModule) =
 # - Codegen Pass ---------------------------------------------------------------
 
 proc myOpen(graph: ModuleGraph; module_sym: PSym): PPassContext =
-  echo "myOpen ", module_sym.name.s
   if graph.backend == nil:
     graph.backend = newModuleList(graph)
   let module = newModule(BModuleList(graph.backend), module_sym, graph.config)
@@ -352,7 +353,6 @@ proc myClose(graph: ModuleGraph; pass: PPassContext, node: PNode): PNode =
 
   if pass != nil:
     let module = BModule(pass)
-    echo "myClose ", module.module_sym.name.s
     if not skipCodegen(module.module_list.config, node):
       finish_module(module)
       if sfMainModule in module.module_sym.flags:
@@ -393,7 +393,7 @@ proc gen_delayed(module: BModule; module_list: BModuleList): int =
     while module.delayed_procs.len > 0:
       let delayed_proc = module.delayed_procs.pop
       assert delayed_proc != nil
-      gen_proc_body(module, delayed_proc)
+      build_proc_body(module, delayed_proc)
       inc(result)
 
     assert module.delayed_procs.len == 0

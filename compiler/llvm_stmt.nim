@@ -47,7 +47,6 @@ proc build_global_var(module: BModule; sym: PSym; initializer: PNode): BValue =
       let value = gen_expr(target, initializer)
       assert value.val != nil, $initializer.kind
       assert result.val != nil
-      #C gen_copy(target, result.val, value.val, skipTypes(initializer.typ, abstractInst))
       build_assign(module, result, value, skipTypes(initializer.typ, abstractInst))
 
 proc build_local_var(module: BModule; sym: PSym; initializer: PNode): BValue =
@@ -65,7 +64,6 @@ proc build_local_var(module: BModule; sym: PSym; initializer: PNode): BValue =
     let value = gen_expr(module, initializer)
     assert value.val != nil, $initializer.kind
     assert result.val != nil
-    #gen_copy(module, result.val, value.val, initializer.typ)
     build_assign(module, result, value, skipTypes(initializer.typ, abstractInst))
 
 proc gen_var_prototype(module: BModule; node: PNode): BValue =
@@ -121,14 +119,14 @@ proc gen_tuple_var(module: BModule; node: PNode) =
 
     let index  = constant(module, int32 i)
     let field_adr = build_field_ptr(module, tuple_var, index, "tuple.index")
-    let field_val = llvm.buildLoad(module.ll_builder, field_adr, "tuple.index.value")
+    let field_val = BLoad(field_adr)
 
     if sfGlobal in i_sym.flags:
       let variable = build_global_var(module, i_sym, nil)
-      gen_copy(module, variable.val, field_val, i_sym.typ)
+      build_bitwise_copy(module, variable.val, field_val, i_sym.typ)
     else:
       let variable = build_local_var(module, i_sym, nil)
-      gen_copy(module, variable.val, field_val, i_sym.typ)
+      build_bitwise_copy(module, variable.val, field_val, i_sym.typ)
 
 proc gen_single_var(module: BModule; node: PNode) =
   let sym = node[0].sym
@@ -232,7 +230,7 @@ proc gen_if(module: BModule; node: PNode): BValue =
       # *** emit then branch code ***
 
       let value = gen_expr(module, it.sons[1]).val
-      if result.val != nil: gen_copy(module, result.val, value, node.typ)
+      if result.val != nil: build_bitwise_copy(module, result.val, value, node.typ)
 
       # terminate basic block if needed
       maybe_terminate(module, post_bb)
@@ -247,15 +245,15 @@ proc gen_if(module: BModule; node: PNode): BValue =
       # *** emit else branch code ***
 
       let value = gen_expr(module, it.sons[0]).val
-      if result.val != nil: gen_copy(module, result.val, value, node.typ)
+      if result.val != nil: build_bitwise_copy(module, result.val, value, node.typ)
 
       # terminate basic block if needed
       maybe_terminate(module, post_bb)
 
   llvm.positionBuilderAtEnd(module.ll_builder, post_bb)
 
-  if result.val != nil and node.typ.kind notin {tyObject, tyTuple, tyArray}:
-    result.val = llvm.buildLoad(module.ll_builder, result.val, "")
+  if (result.val != nil) and (live_as_pointer(module, node.typ) == false):
+    result.val = BLoad(result.val)
 
 proc gen_while(module: BModule; node: PNode) =
   #[
@@ -457,39 +455,29 @@ proc build_try_longjump(module: BModule; node: PNode) =
   let safe_point = build_entry_alloca(module, safe_point_type, "safe_point")
   let status_adr = build_field_ptr(module, safe_point, constant(module, int32 1)) # i64*
   let context_adr = build_field_ptr(module, safe_point, constant(module, int32 2)) # [N x i64]*
-  discard gen_call_runtime_proc(module, "pushSafePoint", @[safe_point])
+  discard build_call_runtime(module, "pushSafePoint", @[safe_point])
 
-  var indices = [constant_int(module, 0), constant_int(module, 0)]
-  let buff = llvm.buildBitCast(module.ll_builder, context_adr, module.ll_pointer, "try.context")
+  let status = build_call_setjmp(module, BBitCast(context_adr, module.ll_pointer))
 
-  let status = build_call_setjmp(module, buff)
+  BStore(BSext(status, module.ll_int), status_adr)
 
-  discard llvm.buildStore(
-    module.ll_builder,
-    llvm.buildSExt(module.ll_builder, status, module.ll_int, ""), status_adr)
-
-  let cond1 = llvm.buildICmp(module.ll_builder,
-    IntEQ,
-    llvm.buildLoad(module.ll_builder, status_adr, "safe_point.status"),
-    constant_int(module, 0),
-    "")
+  let cond1 = BICmp(IntEQ, BLoad(status_adr), CInt 0)
   discard llvm.buildCondBr(module.ll_builder, cond1, then_bb, else_bb)
 
   # try.if.then:
   llvm.positionBuilderAtEnd(module.ll_builder, then_bb)
   let try_code = gen_expr(module, node[0]).val
-  discard gen_call_runtime_proc(module, "popSafePoint", @[])
+  discard build_call_runtime(module, "popSafePoint", @[])
   discard llvm.buildBr(module.ll_builder, finally_bb)
 
   # try.if.else:
   # generate landing pad
   llvm.positionBuilderAtEnd(module.ll_builder, else_bb)
-  discard gen_call_runtime_proc(module, "popSafePoint", @[])
-  let exception = gen_call_runtime_proc(module, "getCurrentException", @[]) # Exception*
+  discard build_call_runtime(module, "popSafePoint", @[])
+  let exception = build_call_runtime(module, "getCurrentException", @[]) # Exception*
 
-  var mtype_indices = [constant(module, int32 0), constant(module, int32 0), constant(module, int32 0)] # e.sup.m_type
-  let exception_mtype_adr = llvm.buildGEP(module.ll_builder, exception, addr mtype_indices[0], cuint len mtype_indices, "")
-  let exception_mtype = llvm.buildLoad(module.ll_builder, exception_mtype_adr, "try.exception.mtype")
+  let exception_mtype_adr = BGep(exception, [CI32 0, CI32 0, CI32 0]) # e.sup.m_type
+  let exception_mtype = BLoad(exception_mtype_adr)
 
   assert_value_type(exception, PointerTypeKind)
 
@@ -501,7 +489,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
     if branch.kind == nkExceptBranch:
       if sonsLen(branch) == 1:
         # except branch without condition
-        discard llvm.buildStore(module.ll_builder, constant_int(module, 0), status_adr)
+        BStore(CInt 0, status_adr)
 
         gen_stmt(module, branch[0])
 
@@ -511,7 +499,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
           assert llvm.getInstructionOpcode(terminator) == Opcode.Br
           llvm.instructionEraseFromParent(terminator)
 
-        discard gen_call_runtime_proc(module, "popCurrentException", @[])
+        discard build_call_runtime(module, "popCurrentException", @[])
       else:
         let incoming_bb = llvm.getInsertBlock(module.ll_builder)
         let except_bb = llvm.appendBasicBlockInContext(module.ll_context, fun, "try.except0")
@@ -520,7 +508,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
         # try.except:
         llvm.positionBuilderAtEnd(module.ll_builder, except_bb)
 
-        discard llvm.buildStore(module.ll_builder, constant_int(module, 0), status_adr)
+        BStore(CInt 0, status_adr)
 
         let except_code = gen_expr(module, lastSon(branch)).val
 
@@ -530,7 +518,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
           assert llvm.getInstructionOpcode(terminator) == Opcode.Br
           llvm.instructionEraseFromParent(terminator)
 
-        discard gen_call_runtime_proc(module, "popCurrentException", @[])
+        discard build_call_runtime(module, "popCurrentException", @[])
         discard llvm.buildBr(module.ll_builder, finally_bb)
 
         # incoming:
@@ -541,7 +529,7 @@ proc build_try_longjump(module: BModule; node: PNode) =
           llvm.moveBasicBlockBefore(next_bb, except_bb)
 
           let type_info = gen_type_info(module, exc_type.typ)
-          let is_obj = gen_call_runtime_proc(module, "isObj", @[exception_mtype, type_info])
+          let is_obj = build_call_runtime(module, "isObj", @[exception_mtype, type_info])
           let cond = build_i8_to_i1(module, is_obj)
           discard llvm.buildCondBr(module.ll_builder, cond, except_bb, next_bb)
 
@@ -562,16 +550,12 @@ proc build_try_longjump(module: BModule; node: PNode) =
     if branch.kind == nkFinally:
       let finally_branch_code = gen_expr(module, branch[0]).val
 
-  let cond2 = llvm.buildICmp(module.ll_builder,
-    IntNE,
-    llvm.buildLoad(module.ll_builder, status_adr, "safe_point.status"),
-    constant_int(module, 0),
-    "")
+  let cond2 = BICmp(IntNE, BLoad(status_adr), CInt 0)
   discard llvm.buildCondBr(module.ll_builder, cond2, reraise_bb, cont_bb)
 
   # try.reraise
   llvm.positionBuilderAtEnd(module.ll_builder, reraise_bb)
-  discard gen_call_runtime_proc(module, "reraiseException", @[])
+  discard build_call_runtime(module, "reraiseException", @[])
   discard llvm.buildBr(module.ll_builder, cont_bb)
 
   # try.cont
@@ -590,7 +574,7 @@ proc build_raise_longjump(module: BModule; node: PNode) =
         let finally_branch_code = gen_expr(module, branch[0]).val
 
   if node[0].kind == nkEmpty:
-    discard gen_call_runtime_proc(module, "reraiseException", @[])
+    discard build_call_runtime(module, "reraiseException", @[])
   else:
     let typ = skipTypes(node[0].typ, abstractPtrs)
     let cast_ty = type_to_ptr get_runtime_type(module, "Exception")
@@ -598,7 +582,7 @@ proc build_raise_longjump(module: BModule; node: PNode) =
     let cast_exception = llvm.buildBitCast(module.ll_builder, exception, cast_ty, "")
     assert typ.sym.name.s != ""
     let name = build_cstring_lit(module, typ.sym.name.s).val
-    discard gen_call_runtime_proc(module, "raiseException", @[cast_exception, name])
+    discard build_call_runtime(module, "raiseException", @[cast_exception, name])
 
 # ------------------------------------------------------------------------------
 
